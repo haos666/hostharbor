@@ -34,6 +34,8 @@ ZIP archives and SHA-256 checksums are available on the [release page](https://g
 
 Windows installers are deferred to a later release. Source code for Windows is not a promise of current Windows release support.
 
+Built-in server investigations and diagnostic probes currently target Linux servers. Other remote systems have not received equivalent feature validation; submitted commands must match the remote shell.
+
 ## Connect your first agent
 
 1. Open HostHarbor and create an app lock password and recovery code. Preserve the recovery code separately.
