@@ -1,0 +1,26 @@
+name: Bug report / 问题反馈
+description: Report a reproducible issue using synthetic or redacted data.
+body:
+  - type: markdown
+    attributes:
+      value: Never include tokens, passwords, private keys, real server addresses or production logs. Use SECURITY.md for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: Application version and macOS version
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Mac architecture
+      options: [Apple Silicon (arm64), Intel (x64)]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and expected / actual behavior
+      description: Use synthetic asset names and redact screenshots.
+    validations:
+      required: true

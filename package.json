@@ -1,0 +1,105 @@
+{
+  "name": "hostharbor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop SSH credential manager with controlled local MCP access, monitoring, audit and replay.",
+  "type": "module",
+  "main": "./out/main/index.cjs",
+  "engines": {
+    "node": "^24.15.0 || >=26.0.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:native": "vite build --config scripts/native-smoke.config.ts && node scripts/run-native-smoke.cjs",
+    "test:i18n-native": "npm run build && node scripts/i18n-native-smoke.cjs",
+    "build": "npm run typecheck && electron-vite build",
+    "check": "npm run typecheck && npm test && electron-vite build",
+    "dist:dir": "npm run build && npm run licenses:build && electron-builder --dir",
+    "dist:mac": "npm run build && npm run licenses:build && electron-builder --mac dmg zip --arm64 --x64 --publish never",
+    "dist:win": "npm run build && electron-builder --win",
+    "test:clients": "vite build --config scripts/client-smoke.config.ts && node work/client-smoke/smoke.cjs",
+    "brand:build": "node scripts/build-branding.mjs",
+    "brand:social": "node scripts/build-social-preview.mjs",
+    "licenses:build": "node scripts/build-third-party-notices.mjs",
+    "dist:mac:arm64": "npm run build && npm run licenses:build && electron-builder --mac dmg zip --arm64 --publish never",
+    "dist:mac:x64": "npm run build && npm run licenses:build && electron-builder --mac dmg zip --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.hostharbor.desktop",
+    "productName": "HostHarbor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "resources/branding/**/*",
+      "LICENSE",
+      "NOTICE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/branding/icon.icns",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/branding/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "extraResources": [
+      {
+        "from": "node_modules/electron/dist/LICENSE",
+        "to": "licenses/Electron-LICENSE"
+      },
+      {
+        "from": "node_modules/electron/dist/LICENSES.chromium.html",
+        "to": "licenses/LICENSES.chromium.html"
+      }
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "socks": "^2.8.10",
+    "ssh2": "^1.17.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ssh2": "^1.15.6",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  },
+  "license": "Apache-2.0",
+  "author": "HostHarbor contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haos666/hostharbor.git"
+  },
+  "homepage": "https://github.com/haos666/hostharbor"
+}
