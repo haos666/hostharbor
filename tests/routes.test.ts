@@ -1,0 +1,150 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { randomBytes } from 'node:crypto'
+import { Store } from '../src/core/storage/database'
+import { ServerService } from '../src/core/servers/service'
+import type { ConnectionTest, ServerRecord, ServerRoute } from '../src/shared/contracts'
+import { sshFixture, socksFixture } from './helpers/routes'
+const cleanup: (() => void | Promise<void>)[] = []
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
+function setup(timeout = 6000) {
+  const service = new ServerService(new Store(':memory:'), timeout)
+  service.unlock(randomBytes(32)); cleanup.push(() => service.close())
+  const targetCredential = service.saveCredential({ name: 'synthetic target', kind: 'password', password: 'target-secret' })
+  const jumpCredential = service.saveCredential({ name: 'synthetic jump', kind: 'password', password: 'jump-secret' })
+  const proxyCredential = service.saveCredential({ name: 'synthetic proxy', kind: 'password', password: 'proxy-secret' })
+  return { service, targetCredential, jumpCredential, proxyCredential }
+}
+function challenge(result: ConnectionTest) { if (result.status !== 'host-key-required') throw new Error('Expected synthetic host challenge'); return result }
+async function target() { const value = await sshFixture(); cleanup.push(value.close); return value }
+async function jump(port: number, options: { denyForward?: boolean } = {}) { const value = await sshFixture({ username: 'jump-user', password: 'jump-secret', forwardPort: port, ...options }); cleanup.push(value.close); return value }
+async function proxy(port: number, options: { auth?: boolean; deny?: boolean; hold?: boolean } = {}) { const value = await socksFixture(port, options); cleanup.push(value.close); return value }
+const input = (port: number, credentialId: string, route: ServerRoute) => ({ name: 'synthetic target', host: 'target.internal', port, username: 'target-user', credentialId, route })
+function edited(server: ServerRecord) { const { revision: _revision, createdAt: _createdAt, ...value } = server; return value }
+
+describe('SSH connection paths', { timeout: 15000 }, () => {
+  it('authenticates jump and target independently and forwards remote-resolved hostname only', async () => {
+    const remote = await target(), transit = await jump(remote.port)
+    const { service, targetCredential, jumpCredential } = setup()
+    const bastion = service.saveServer({ name: 'synthetic bastion', host: '127.0.0.1', port: transit.port, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    const first = challenge(await service.testConnection(server.id))
+    expect(first.role).toBe('jump'); expect(first.serverName).toBe(bastion.name); expect(transit.users).toEqual([]); expect(remote.users).toEqual([])
+    service.trustHost(first.challengeId)
+    const second = challenge(await service.testConnection(server.id))
+    expect(second.role).toBe('target'); expect(remote.users).toEqual([]); expect(transit.users).toEqual(['jump-user'])
+    service.trustHost(second.challengeId)
+    expect((await service.testConnection(server.id)).status).toBe('connected')
+    expect(remote.users).toEqual(['target-user']); expect(transit.users.every((name) => name === 'jump-user')).toBe(true)
+    expect(transit.destinations.every((host) => host === 'target.internal')).toBe(true)
+    expect(remote.sessions + transit.sessions).toBe(0)
+    await vi.waitFor(() => expect(remote.active + transit.active).toBe(0))
+  })
+  it('does not fall back to direct if jump rejects forwarding', async () => {
+    const remote = await target(), transit = await jump(remote.port, { denyForward: true })
+    const { service, targetCredential, jumpCredential } = setup()
+    const bastion = service.saveServer({ name: 'jump', host: '127.0.0.1', port: transit.port, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'PROXY_FAILED' })
+    expect(remote.users).toEqual([]); await vi.waitFor(() => expect(transit.active).toBe(0))
+  })
+  it.each([false, true])('uses SOCKS5 with auth=%s and sends the hostname to the proxy', async (auth) => {
+    const remote = await target(), socks = await proxy(remote.port, { auth })
+    const { service, targetCredential, proxyCredential } = setup()
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: socks.port, authentication: auth ? { type: 'password', username: 'proxy-user', credentialId: proxyCredential.id } : { type: 'none' } }))
+    const first = challenge(await service.testConnection(server.id))
+    expect(first.role).toBe('target'); expect(remote.users).toEqual([])
+    service.trustHost(first.challengeId)
+    expect((await service.testConnection(server.id)).status).toBe('connected')
+    expect(remote.users).toEqual(['target-user']); expect(socks.destinations).toEqual(['target.internal', 'target.internal'])
+    expect(socks.users).toEqual(auth ? ['proxy-user', 'proxy-user'] : [])
+    expect(remote.sessions).toBe(0); await vi.waitFor(() => expect(socks.active + remote.active).toBe(0))
+  })
+  it('rejects incorrect SOCKS credentials and proxy rejection before target authentication', async () => {
+    const remote = await target(), socks = await proxy(remote.port, { auth: true })
+    const { service, targetCredential, proxyCredential } = setup()
+    service.saveCredential({ id: proxyCredential.id, name: proxyCredential.name, kind: 'password', password: 'incorrect-synthetic' })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: socks.port, authentication: { type: 'password', username: 'proxy-user', credentialId: proxyCredential.id } }))
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'PROXY_FAILED' })
+    expect(remote.users).toEqual([]); await vi.waitFor(() => expect(socks.active).toBe(0))
+    const denied = await proxy(remote.port, { deny: true })
+    service.saveServer({ ...edited(server), route: { type: 'socks5', host: '127.0.0.1', port: denied.port, authentication: { type: 'none' } } })
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'PROXY_FAILED' })
+    expect(remote.users).toEqual([])
+  })
+  it.each(['lock', 'change', 'timeout'] as const)('closes stalled SOCKS negotiation on %s', async (action) => {
+    const socks = await proxy(1, { hold: true })
+    const { service, targetCredential } = setup(action === 'timeout' ? 200 : 6000)
+    const server = service.saveServer(input(1, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: socks.port, authentication: { type: 'none' } }))
+    const pending = expect(service.testConnection(server.id)).rejects.toMatchObject({ code: action === 'lock' ? 'VAULT_LOCKED' : action === 'change' ? 'CONFIG_CHANGED' : 'CONNECTION_TIMEOUT' })
+    await vi.waitFor(() => expect(socks.active).toBe(1))
+    if (action === 'lock') service.lock()
+    if (action === 'change') service.saveServer({ ...edited(server), name: 'changed synthetic route' })
+    await pending; await vi.waitFor(() => expect(socks.active).toBe(0))
+  })
+  it('invalidates a pending target fingerprint after jump credential changes', async () => {
+    const remote = await target(), transit = await jump(remote.port)
+    const { service, targetCredential, jumpCredential } = setup()
+    const bastion = service.saveServer({ name: 'jump', host: '127.0.0.1', port: transit.port, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    const pending = challenge(await service.testConnection(server.id))
+    service.saveCredential({ id: jumpCredential.id, name: jumpCredential.name, kind: 'password', password: 'new-synthetic' })
+    expect(() => service.trustHost(pending.challengeId)).toThrow('过期')
+  })
+  it('blocks changed target and jump host keys before sending their respective credentials', async () => {
+    const remote = await target(), transit = await jump(remote.port)
+    const { service, targetCredential, jumpCredential } = setup()
+    const bastion = service.saveServer({ name: 'jump', host: '127.0.0.1', port: transit.port, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    expect((await service.testConnection(server.id)).status).toBe('connected')
+    await vi.waitFor(() => expect(remote.active + transit.active).toBe(0))
+    await remote.close()
+    const replacement = await sshFixture({ port: remote.port }); cleanup.push(replacement.close)
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'HOST_KEY_CHANGED' })
+    expect(replacement.users).toEqual([])
+    await vi.waitFor(() => expect(transit.active).toBe(0)); await transit.close()
+    const newJump = await sshFixture({ port: transit.port, username: 'jump-user', password: 'jump-secret', forwardPort: remote.port }); cleanup.push(newJump.close)
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'HOST_KEY_CHANGED' })
+    expect(newJump.users).toEqual([]); expect(newJump.destinations).toEqual([])
+  })
+  it('closes both SSH connections and forwarding when locked during target authentication', async () => {
+    const remote = await sshFixture({ holdAuth: true }); cleanup.push(remote.close)
+    const transit = await jump(remote.port)
+    const { service, targetCredential, jumpCredential } = setup()
+    const bastion = service.saveServer({ name: 'jump', host: '127.0.0.1', port: transit.port, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    service.trustHost(challenge(await service.testConnection(server.id)).challengeId)
+    const pending = expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'VAULT_LOCKED' })
+    await vi.waitFor(() => expect(remote.users).toEqual(['target-user']))
+    service.lock(); await pending
+    await vi.waitFor(() => expect(remote.active + transit.active).toBe(0))
+  })
+  it('fails closed on malformed persisted routes and never treats them as direct', async () => {
+    const { service, targetCredential } = setup()
+    const server = service.saveServer(input(22, targetCredential.id, { type: 'direct' }))
+    service.store.db.prepare('UPDATE servers SET route=? WHERE id=?').run('{"type":"unknown"}', server.id)
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'STORAGE_FAILED' })
+  })
+  it('keeps SOCKS protocol limits local to proxy credentials', async () => {
+    const { service, targetCredential, proxyCredential } = setup()
+    service.saveCredential({ id: proxyCredential.id, name: proxyCredential.name, kind: 'password', password: 'é'.repeat(128) })
+    const server = service.saveServer(input(22, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: 1, authentication: { type: 'password', username: 'proxy-user', credentialId: proxyCredential.id } }))
+    await expect(service.testConnection(server.id)).rejects.toMatchObject({ code: 'PROXY_CREDENTIAL' })
+  })
+  it('protects jump and SOCKS references from deletion and rejects cycles and nested paths', () => {
+    const { service, targetCredential, jumpCredential, proxyCredential } = setup()
+    const bastion = service.saveServer({ name: 'jump', host: '127.0.0.1', port: 22, username: 'jump-user', credentialId: jumpCredential.id })
+    const server = service.saveServer(input(22, targetCredential.id, { type: 'ssh-jump', serverId: bastion.id }))
+    expect(() => service.deleteServer(bastion.id)).toThrow('跳板')
+    expect(() => service.saveServer({ ...edited(bastion), route: { type: 'ssh-jump', serverId: server.id } })).toThrow()
+    expect(() => service.saveServer({ ...edited(server), route: { type: 'ssh-jump', serverId: server.id } })).toThrow()
+    expect(() => service.saveServer({ ...edited(bastion), credentialId: null })).toThrow('跳板')
+    const socks = service.saveServer(input(22, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: 1080, authentication: { type: 'password', username: 'proxy-user', credentialId: proxyCredential.id } }))
+    expect(() => service.deleteCredential(proxyCredential.id)).toThrow('引用')
+    service.saveServer({ ...edited(socks), route: { type: 'direct' } }); service.deleteCredential(proxyCredential.id)
+  })
+})

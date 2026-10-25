@@ -1,0 +1,61 @@
+name: macOS checks and packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Native key protection, utility process and synthetic SSH/SFTP
+        run: npm run test:native
+        timeout-minutes: 3
+      - name: Build architecture-specific unsigned macOS installers
+        run: npm run dist:mac:${{ matrix.arch }}
+      - name: Verify architecture and calculate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ matrix.arch }}' == 'arm64' ]]; then app_dir='release/mac-arm64'; expected='arm64'; else app_dir='release/mac'; expected='x86_64'; fi
+          lipo -archs "$app_dir/HostHarbor.app/Contents/MacOS/HostHarbor" | grep -w "$expected"
+          cd release
+          shasum -a 256 HostHarbor-*-mac-${{ matrix.arch }}.dmg HostHarbor-*-mac-${{ matrix.arch }}.zip > SHA256SUMS-${{ matrix.arch }}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            release/HostHarbor-*-mac-${{ matrix.arch }}.dmg
+            release/HostHarbor-*-mac-${{ matrix.arch }}.zip
+            release/SHA256SUMS-${{ matrix.arch }}.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

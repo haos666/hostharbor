@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+# Exact, intentionally synthetic values used only by credential/privacy tests.
+# No production path, real token, whole test directory or detection rule is excluded.
+[[allowlists]]
+description = "Known synthetic privacy test values"
+targetRules = ["curl-auth-header", "generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''(?:^|/)tests/(?:helpers/diagnostic-cases|operations\.test|vault\.test)\.ts$''']
+regexes = ['''^synthetic$''', '''^synthetic-unique-secret-573829$''']
