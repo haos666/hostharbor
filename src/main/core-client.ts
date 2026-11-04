@@ -41,7 +41,7 @@ export class CoreClient {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         resolve({ ok: false, error: { code: 'CORE_UNAVAILABLE', message: '执行内核没有及时响应。' } })
-      }, method === 'testAiTools' ? 130000 : 20000)
+      }, method === 'testAiTools' ? 130000 : ['exportBackup', 'previewBackup', 'commitBackup', 'draftInspectionPlan'].includes(method) ? 120000 : 20000)
       this.pending.set(id, { resolve, timer })
       try { this.worker.postMessage({ id, method, payload }) } catch {
         clearTimeout(timer); this.pending.delete(id)

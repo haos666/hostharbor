@@ -35,7 +35,7 @@
 | `list_servers` | 无 | 仅列出此接入授权的服务器 ID、名称、地址、端口和账号 |
 | `start_command` | `serverId`、`requestKey`、`command`、`cwd`，可选 `timeoutMs`、`connectTimeoutMs` | 返回操作 ID 和状态，可能等待桌面批准 |
 | `get_operation` | `id` | 返回本接入操作的状态、不可变配置快照、确认目录、退出码等 |
-| `read_output` | `id`、`cursor`（默认 0） | 返回最多 8 块文本及 `nextCursor`，继续游标读取 |
+| `read_output` | `id`、`cursor`（默认 0） | 每次最多 8 块，返回 `hasMore`、`outputComplete`、`outputAvailability` 及数字 `nextCursor`；按指引续读同一操作 |
 | `cancel_operation` | `id` | 请求取消并断开连接，不能证明远端进程已停止 |
 
 命令示例（全部为占位参数）：
@@ -168,3 +168,24 @@ Tab 支持左右方向键及 Home/End；工具树支持上下/Home/End 移动焦
 
 
 接入管理提供搜索、状态筛选与20/50/100条分页。默认列表显示使用中接入，“全部”包含已删除，切换“已删除”可查看保留记录；删除接入立即使Token失效并中止未派发任务，进行中的连接会断开，但不保证远端进程停止。操作日志仍保留。删除与撤销记录均不可恢复授权，需要重新创建接入。
+
+## 录制输出分页
+
+`read_output` 每次调用最多返回 8 块录制片段，不是每条操作累计最多 8 块，也不等于 8 行。续页只读取原操作的本地录制，不新建 SSH 会话、不执行原命令，也不重置审批等待时间。
+
+- `hasMore=true`：当前页后面还有已保存片段，使用 `agentGuidance.resume` 指定的同一个 `id` 和 `cursor=nextCursor` 读取下一页。
+- `hasMore=false, outputComplete=false, outputAvailability=retained`：暂时没有后续片段，本地采集尚未结束。遵循状态指引和 `pollAfterMs`，不要连续读取空页。
+- `outputComplete=true`：本地采集已结束，且当前游标之后的保留输出已读完。这不保证原始输出全部被录制，也不证明 `unknown` 的远端进程停止。仍需结合退出码、错误和状态分析。
+- `outputAvailability=cleared`：录制已清理；`outputComplete=false`，停止读取，不能据此声称原输出为空。
+- `nextCursor` 为下一片段序号，首次从 0 开始。兼容旧调用方，末页仍返回数字游标；数字游标的存在不代表还有下一页。
+
+`state=succeeded` 仅表示命令已完成，不能用来判断输出是否读完。每个续页仍验证接入归属、服务器范围、到期/撤销和凭证库状态。待审批三分钟预算只用于待审批阶段，不用于已完成输出分页。客户端明确拒绝工具调用时应停止，不重复被拒绝的调用、换工具或重跑命令绕过。
+
+本地服务更新并重启后，新请求使用新实现；客户端可能缓存 `initialize` instructions 和 `tools/list` 工具描述，需要在客户端重新连接/刷新 MCP 工具。各客户端自动审批的具体决定不由 HostHarbor 保证；用新建的合成操作验收，不能把重复旧拒绝当成回归方法。
+
+English: The eight-chunk limit applies **per call**, not cumulatively. Page the same operation only while `hasMore=true`, following `agentGuidance.resume`. `nextCursor` stays numeric on final pages for compatibility. `outputComplete` describes local retained-output exhaustion, not complete original capture or remote-process termination. A running empty page is not EOF; follow guidance and polling intervals. Cleared recordings are unavailable, not originally empty. Stop on explicit client rejection; do not retry or rerun to bypass it. Refresh/reconnect the MCP client after updating cached tool metadata.
+
+
+## 巡检手册与报告
+
+新增 `list_inspection_plans`、`get_inspection_plan`、`submit_inspection_report`。手册只提供任务资料，不自动执行或授予权限；外部智能体保存版本/摘要和检查窗口，按原有操作流程检查后提交各项结果。报告由认证接入提交，证据需属于该接入、同服务器及检查时段；无证据不能报正常。平台核对关联，不独立验证结论。详见[巡检使用说明](inspections.md)。服务更新后需刷新 MCP 工具缓存。

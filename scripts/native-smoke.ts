@@ -25,6 +25,7 @@ import { applicationIcon, createBrandTray } from '../src/main/branding'
 import { CoreClient } from '../src/main/core-client'
 import { KeyStore } from '../src/main/key-store'
 import type { AppStatus, CredentialSummary, ServerRecord } from '../src/shared/contracts'
+import type { BackupCounts, BackupPreview, BackupImportResult } from '../src/shared/backup'
 
 // No renderer or production data: only temporary storage and generated synthetic secrets.
 const directory = process.argv[2]
@@ -183,7 +184,8 @@ void app.whenReady().then(async () => {
     console.log('PASS: utility process, SQLite persistence, IPC, lock and restart')
     fixture = await sshFixture({ exec: (command, stream) => {
       const marker = command.match(/[a-f0-9]{48}/)![0]
-      stream.write(`${marker}\0/native-fixture\0native synthetic output\nLinux synthetic OS\n`)
+      const output = command.includes('synthetic-pagination-large') ? 'synthetic native output line\n'.repeat(1600) : 'native synthetic output\nLinux synthetic OS\n'
+      stream.write(`${marker}\0/native-fixture\0${output}`)
       setTimeout(() => { stream.exit(0); stream.end() }, 10)
     } })
     const commandCredential = await core.call<CredentialSummary>('saveCredential', { name: 'synthetic command credential', kind: 'password', password: 'target-secret' })
@@ -198,7 +200,7 @@ void app.whenReady().then(async () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(mcp.url), { requestInit: { headers: { Authorization: `Bearer ${access.token}` } } }))
     assert.equal(client.getInstructions(), mcpInstructions)
     const unpack = (value: unknown) => JSON.parse((value as { content: { text: string }[] }).content[0].text)
-    assert.equal((await client.listTools()).tools.length, 12)
+    assert.equal((await client.listTools()).tools.length, 15)
     const logApp = await core.call<ApplicationRecord>('saveApplication', { serverId: commandTarget.id, revision: 0, name: 'Synthetic login service', aliases: ['lpp'], description: '', environment: 'test', deploymentPath: '/srv/synthetic', runtime: 'systemd', runtimeTarget: 'fixture.service', logSources: [{ id: randomUUID(), name: 'runtime', kind: 'journal', target: 'fixture.service', timezone: 'UTC' }] })
     assert.equal(unpack(await client.callTool({ name: 'find_applications', arguments: { serverId: commandTarget.id, query: 'lpp' } })).applications[0].id, logApp.id)
     const logOperation = unpack(await client.callTool({ name: 'query_application_logs', arguments: { serverId: commandTarget.id, applicationId: logApp.id, applicationRevision: logApp.revision, sourceId: logApp.logSources[0].id, requestKey: 'native-app-logs', since: '2026-10-21T00:00:00Z', until: '2026-10-21T00:30:00Z' } })) as Operation
@@ -222,7 +224,7 @@ void app.whenReady().then(async () => {
     assert.equal(handedOff.state, 'awaiting_approval')
     assert.equal(handedOff.agentGuidance?.nextAction, 'ask_user')
     assert.equal(handedOff.agentGuidance?.pollAfterMs, null)
-    assert.equal(handedOff.agentGuidance?.resume.arguments.id, operation.id)
+    assert.equal(handedOff.agentGuidance?.resume?.arguments.id, operation.id)
     assert.equal(handedOff.agentGuidance?.automaticResubmitAllowed, false)
     const repeated = unpack(await client.callTool({ name: 'start_command', arguments: { ...operation.input } })) as Operation
     assert.equal(repeated.id, operation.id)
@@ -598,6 +600,96 @@ void app.whenReady().then(async () => {
     const persistedSudo = (await core.call<ServerRecord[]>('listServers')).find(s => s.id === sudoServer.id)!
     assert.deepEqual(persistedSudo.elevation, { type: 'sudo', passwordSource: 'credential', credentialId: sudoPassword.id })
     console.log('PASS: native MCP structured sudo uses bound password after policy authorization (manual or permissive maintenance), destructive sudo awaits approval, split prompt/redaction/restart persist; synthetic SSH only')
+    const pagingAccess = await core.call<any>('createProfile', { name: 'Synthetic pagination client', serverIds: [commandTarget.id], mode: 'policy', expiresAt: null })
+    const pagingEndpoint = await core.call<any>('startMcp'), pagingClient = new Client({ name: 'Synthetic pagination client', version: '1' })
+    try {
+      await pagingClient.connect(new StreamableHTTPClientTransport(new URL(pagingEndpoint.url), { requestInit: { headers: { Authorization: `Bearer ${pagingAccess.token}` } } }))
+      assert.ok((await pagingClient.listTools()).tools.find(t => t.name === 'read_output')!.description!.includes('PER CALL, not cumulatively'))
+      const inspectionWorkspace = await core.call<any>('getInspectionWorkspace', commandTarget.id)
+      const inspectionPlan = await core.call<any>('saveInspectionPlan', {serverId:commandTarget.id,serverRevision:inspectionWorkspace.serverRevision,contextDigest:inspectionWorkspace.contextDigest,revision:0,title:'Synthetic native inspection',markdown:'## Native health\nCheck synthetic health and report only.',applicationIds:[]})
+      const inspectionDraft = await core.call<any>('draftInspectionPlan', {serverId:commandTarget.id,serverRevision:inspectionWorkspace.serverRevision,contextDigest:inspectionWorkspace.contextDigest,revision:inspectionPlan.revision,useAi:false,locale:'en'})
+      assert.ok(inspectionDraft.markdown.includes('## System resources'))
+      const fetchedPlan = unpack(await pagingClient.callTool({name:'get_inspection_plan',arguments:{serverId:commandTarget.id}}))
+      assert.equal(fetchedPlan.plan.digest,inspectionPlan.digest)
+      const before = fixture.sessions
+      const op = unpack(await pagingClient.callTool({ name: 'start_command', arguments: { serverId: commandTarget.id, requestKey: 'synthetic-pagination-native', command: 'synthetic-pagination-large', cwd: '/', timeoutMs: 3000, connectTimeoutMs: 3000 } })) as Operation
+      if (op.state === 'awaiting_approval') await core.call('decideOperation', { id: op.id, approve: true })
+      for (let i = 0; i < 100; i++) { if ((await core.call<Operation>('getOperation', op.id)).state === 'succeeded') break; await new Promise(r => setTimeout(r, 25)) }
+      let cursor = 0, text = '', pages = 0
+      for (;;) {
+        const page = unpack(await pagingClient.callTool({ name: 'read_output', arguments: { id: op.id, cursor } }))
+        assert.ok(page.chunks.length <= 8); pages++; text += page.chunks.map((c: { text: string }) => c.text).join('')
+        if (!page.hasMore) { assert.equal(page.outputComplete, true); assert.equal(page.agentGuidance.nextAction, 'stop'); assert.equal(page.agentGuidance.resume, null); break }
+        assert.deepEqual(page.agentGuidance.resume, { tool: 'read_output', arguments: { id: op.id, cursor: page.nextCursor } })
+        assert.ok(page.nextCursor > cursor && pages < 10); cursor = page.nextCursor
+      }
+      assert.ok(pages > 1); assert.equal(text, 'synthetic native output line\n'.repeat(1600)); assert.equal(fixture.sessions, before + 1)
+      const inspectionReport = unpack(await pagingClient.callTool({name:'submit_inspection_report',arguments:{serverId:commandTarget.id,serverRevision:inspectionWorkspace.serverRevision,planRevision:inspectionPlan.revision,planDigest:inspectionPlan.digest,requestKey:'synthetic-native-report',startedAt:inspectionPlan.updatedAt,finishedAt:Date.now(),summary:'Synthetic native inspection passed',items:[{checkId:'check-1',status:'normal',finding:'Synthetic query succeeded',operationIds:[op.id]}]}}))
+      assert.equal(inspectionReport.status,'normal')
+      const reportDetails = await core.call<any>('getInspectionReport',{serverId:commandTarget.id,id:inspectionReport.id})
+      assert.equal(reportDetails.profileId,pagingAccess.profile.id)
+      assert.equal(reportDetails.plan.revision,inspectionPlan.revision)
+      assert.equal(reportDetails.evidence[0].id,op.id)
+      console.log('PASS: native inspection handbook, offline draft and authenticated MCP report submission freeze plan version and synthetic operation evidence')
+      console.log('PASS: native utility MCP pages synthetic SSH output beyond eight fragments with exact cursors, explicit exhaustion and no repeated command execution')
+    } finally { await pagingClient.close() }
+    const backupPath = join(directory, 'native.hhbackup')
+    const backupCounts = await core.call<BackupCounts>('exportBackup', { path: backupPath, password: '1' })
+    assert.ok(backupCounts.servers >= 3 && backupCounts.credentials >= 3)
+    const restoreDirectory = join(directory, 'restored')
+    mkdirSync(restoreDirectory, { mode: 0o700 })
+    const restoredCore = new CoreClient(restoreDirectory, join(process.cwd(), 'out/main/core.cjs'), 0)
+    try {
+      const restoredSecurity = new SecurityService(new KeyStore(restoreDirectory), restoredCore)
+      await restoredSecurity.setup({ password: 'synthetic-restored-password', recovery: 'synthetic-restored-recovery' })
+      await restoredSecurity.unlock('synthetic-restored-password')
+      const preview = await restoredCore.call<BackupPreview>('previewBackup', { path: backupPath, password: '1' })
+      assert.deepEqual(preview.counts, backupCounts)
+      const imported = await restoredCore.call<BackupImportResult>('commitBackup', { sessionId: preview.sessionId, servers: preview.items.filter(i => i.kind === 'server').map(i => i.id), credentials: preview.items.filter(i => i.kind === 'credential').map(i => i.id) })
+      assert.equal(imported.servers, backupCounts.servers)
+      assert.deepEqual(await restoredCore.call('listProfiles'), [])
+      const target = (await restoredCore.call<ServerRecord[]>('listServers')).find(s => s.name === commandTarget.name)!
+      assert.notEqual(target.id, commandTarget.id)
+      assert.equal((await restoredCore.call<ConnectionTest>('testConnection', target.id)).status, 'connected')
+      await restoredSecurity.lockDesktop()
+      await assert.rejects(restoredCore.call('exportBackup', { path: join(directory, 'locked.hhbackup'), password: '1' }))
+      console.log('PASS: native encrypted backup over utility IPC, independent OS-protected destination key, restored synthetic SSH/pin, no MCP grants, locked desktop rejects export')
+    } finally { await restoredCore.stopAndWait() }
+    const channelOriginalDefault=await core.call<any>('getApprovalPolicy')
+    await core.call('saveApprovalPolicy',{...channelOriginalDefault,mode:'all-approval'})
+    const channelAccess=await core.call<any>('createProfile',{name:'Synthetic channel A',serverIds:[commandTarget.id],mode:'policy',expiresAt:null})
+    const channelEndpoint=await core.call<any>('startMcp')
+    client=new Client({name:'Synthetic channel A',version:'1'})
+    await client.connect(new StreamableHTTPClientTransport(new URL(channelEndpoint.url),{requestInit:{headers:{Authorization:'Bearer '+channelAccess.token}}}))
+    const channelA=await core.call<any>('getChannelApprovalPolicy',channelAccess.profile.id)
+    assert.equal(channelA.policy,null)
+    await core.call('saveChannelApprovalPolicy',{profileId:channelAccess.profile.id,revision:channelA.revision,policy:{...channelA.defaultPolicy,revision:channelA.revision,mode:'permissive',rules:[],uploadApprovalRequired:{permissive:false},downloadApprovalRequired:{permissive:false}},permissiveConfirmed:true})
+    const channelB=await core.call<any>('createProfile',{name:'Synthetic independent channel',serverIds:[commandTarget.id],mode:'policy',expiresAt:null})
+    const otherClient=new Client({name:'Synthetic channel B',version:'1'})
+    let pendingChannelB:Operation
+    try{await otherClient.connect(new StreamableHTTPClientTransport(new URL(channelEndpoint.url),{requestInit:{headers:{Authorization:'Bearer '+channelB.token}}}));pendingChannelB=unpack(await otherClient.callTool({name:'start_command',arguments:{serverId:commandTarget.id,requestKey:'synthetic-channel-pending',command:'pwd',cwd:'/native-fixture'}})) as Operation;assert.equal(pendingChannelB.state,'awaiting_approval')}finally{await otherClient.close()}
+    const channelOperation=unpack(await client.callTool({name:'start_command',arguments:{serverId:commandTarget.id,requestKey:'synthetic-channel-auto',command:'pwd',cwd:'/native-fixture'}})) as Operation
+    assert.equal(channelOperation.decision?.scope?.source,'channel');assert.equal(channelOperation.decision?.action,'allow')
+    for(let n=0;n<40;n++){if((await core.call<Operation>('getOperation',channelOperation.id)).state==='succeeded')break;await new Promise(r=>setTimeout(r,50))}
+    assert.equal((await core.call<Operation>('getOperation',channelOperation.id)).state,'succeeded')
+    await core.call('saveApprovalPolicy',{...(await core.call<any>('getApprovalPolicy')),forceApproval:true})
+    const forcedApproval=unpack(await client.callTool({name:'start_command',arguments:{serverId:commandTarget.id,requestKey:'synthetic-channel-forced-approval',command:'pwd',cwd:'/native-fixture'}})) as Operation
+    assert.equal(forcedApproval.state,'awaiting_approval')
+    const forcedFileAccess=unpack(await client.callTool({name:'get_file_access',arguments:{serverId:commandTarget.id}}))
+    assert.equal(forcedFileAccess.uploadRequiresApproval,true);assert.equal(forcedFileAccess.downloadRequiresApproval,true)
+    await core.call('saveApprovalPolicy',{...(await core.call<any>('getApprovalPolicy')),denyExecution:true})
+    assert.equal((await core.call<Operation>('getOperation',forcedApproval.id)).state,'interrupted')
+    assert.equal((await core.call<Operation>('getOperation',pendingChannelB!.id)).state,'interrupted')
+    const pausedChannel=unpack(await client.callTool({name:'start_command',arguments:{serverId:commandTarget.id,requestKey:'synthetic-channel-paused',command:'pwd',cwd:'/native-fixture'}})) as Operation
+    assert.equal(pausedChannel.state,'denied')
+    await core.call('saveApprovalPolicy',{...(await core.call<any>('getApprovalPolicy')),mode:channelA.defaultPolicy.mode,forceApproval:false,denyExecution:false})
+    const savedChannel=await core.call<any>('getChannelApprovalPolicy',channelAccess.profile.id)
+    await core.call('saveChannelApprovalPolicy',{profileId:channelAccess.profile.id,revision:savedChannel.revision,policy:null})
+    await core.call('revokeProfile',channelB.profile.id)
+    console.log('PASS: native channel policy IPC, two authenticated MCP tokens isolated, automatic synthetic SSH, global forced approval/files, deny priority and reset')
+    await core.call('saveApprovalPolicy',{...(await core.call<any>('getApprovalPolicy')),mode:channelOriginalDefault.mode,permissiveConfirmed:true})
+    await core.call('revokeProfile',channelAccess.profile.id)
+    await client.close();client=undefined
     assert.ok(Number.isFinite(powerMonitor.getSystemIdleTime()) && powerMonitor.getSystemIdleTime() >= 0)
     const idleSecurity = new SecurityService(new KeyStore(directory), core)
     let idleNow = 0, idleSample = 10000

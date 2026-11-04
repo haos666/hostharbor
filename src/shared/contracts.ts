@@ -22,6 +22,18 @@ export interface ApprovalReminder { sequence: number; count: number; operationId
 export interface ApprovalNavigation { operationId?: string; sequence: number }
 
 export interface HostHarborApi {
+  getInspectionWorkspace(serverId: string): Promise<Result<import('./inspection').InspectionWorkspace>>
+  saveInspectionPlan(input: import('./inspection').InspectionSave): Promise<Result<import('./inspection').InspectionPlan>>
+  draftInspectionPlan(input: import('./inspection').InspectionDraftInput): Promise<Result<import('./inspection').InspectionDraft>>
+  listInspectionReports(input: {serverId:string;offset?:number;pageSize?:10|20}): Promise<Result<import('./inspection').InspectionReportPage>>
+  getInspectionReport(input: {serverId:string;id:string}): Promise<Result<import('./inspection').InspectionReport>>
+  deleteInspectionReport(input: {serverId:string;id:string}): Promise<Result<void>>
+  backupSummary(): Promise<Result<import('./backup').BackupCounts>>
+  chooseBackupFile(): Promise<Result<{ id: string; name: string } | null>>
+  exportBackup(password: string): Promise<Result<import('./backup').BackupCounts | null>>
+  previewBackup(input: { fileId: string; password: string }): Promise<Result<import('./backup').BackupPreview>>
+  commitBackup(input: import('./backup').BackupSelection): Promise<Result<import('./backup').BackupImportResult>>
+  cancelBackup(): Promise<Result<void>>
   getLanguage(): Promise<Result<import('./i18n').LanguageSettings>>
   saveLanguage(preference: import('./i18n').LanguagePreference): Promise<Result<import('./i18n').LanguageSettings>>
   onLanguageChanged(listener: (settings: import('./i18n').LanguageSettings) => void): () => void
@@ -59,6 +71,8 @@ export interface HostHarborApi {
   clearOperationOutput(id: string): Promise<Result<void>>
   deleteOperation(id: string): Promise<Result<void>>
   reclaimRecordingSpace(): Promise<Result<RecordingStorage>>
+  getChannelApprovalPolicy(profileId:string):Promise<Result<ChannelApprovalPolicy>>
+  saveChannelApprovalPolicy(input:{profileId:string;revision:number;policy:ApprovalPolicy|null;permissiveConfirmed?:boolean}):Promise<Result<ChannelApprovalPolicy>>
   getApprovalPolicy(): Promise<Result<ApprovalPolicy>>
   saveApprovalPolicy(input: ApprovalPolicy & { permissiveConfirmed?: boolean }): Promise<Result<ApprovalPolicy>>
   previewApprovalPolicy(input: { profileId: string; serverId: string; command: string; cwd: string }): Promise<Result<PolicyDecision>>
@@ -154,7 +168,7 @@ export interface ProfileUpdate { id: string; revision: number; name: string; ser
 export type ProfileStatus = 'active' | 'expired' | 'revoked' | 'deleted'
 export interface ProfileQuery { query?: string; status?: ProfileStatus | 'available' | 'all'; offset?: number; pageSize?: number }
 export interface ProfilePage { profiles: AccessProfile[]; total: number; offset: number; pageSize: number }
-export interface AccessProfile extends ProfileInput { id: string; createdAt: number; revokedAt?: number; revision: number; hasSavedToken: boolean; deletedAt?: number }
+export interface AccessProfile extends ProfileInput { approvalSource?:'default'|'channel'; id: string; createdAt: number; revokedAt?: number; revision: number; hasSavedToken: boolean; deletedAt?: number }
 export interface McpStatus { running: boolean; url: string | null }
 export interface CommandInput { elevation?: 'sudo'; serverId: string; requestKey: string; command: string; cwd: string; timeoutMs: number; connectTimeoutMs: number }
 export type OperationState = 'awaiting_approval' | 'queued' | 'connecting' | 'dispatching' | 'running' | 'succeeded' | 'failed' | 'denied' | 'interrupted' | 'unknown' | 'expired'
@@ -163,7 +177,7 @@ export interface OperationGuidance {
   nextAction: 'poll' | 'ask_user' | 'read_output' | 'stop' | 'inspect'
   pollAfterMs: number | null
   approvalWaitUntil: number | null; approvalExpiresAt: number | null
-  resume: { tool: 'get_operation'; arguments: { id: string } }
+  resume: { tool: 'get_operation'; arguments: { id: string } } | { tool: 'read_output'; arguments: { id: string; cursor: number } } | null
   automaticResubmitAllowed: false
   message: string
 }
@@ -184,7 +198,11 @@ export interface Operation {
   errorCode: string | null; confirmedCwd?: string; exitCode?: number; signal?: string
 }
 export interface OutputChunk { seq: number; stream: 'stdout' | 'stderr'; elapsedMs: number; text: string }
-export interface OutputPage { chunks: OutputChunk[]; nextCursor: number; state: OperationState; replayClearedAt?: number | null; agentGuidance?: OperationGuidance }
+export interface OutputPage {
+  chunks: OutputChunk[]; nextCursor: number; state: OperationState
+  hasMore: boolean; outputComplete: boolean; outputAvailability: 'retained' | 'cleared'
+  replayClearedAt?: number | null; agentGuidance?: OperationGuidance
+}
 
 export type PolicyAction = 'allow' | 'approval' | 'deny'
 export type ApprovalMode = 'all-approval' | 'assisted' | 'permissive' | 'rules' | 'paused'
@@ -194,7 +212,9 @@ export interface ApprovalRule {
   command: string | null; cwd: string | null; expiresAt: number | null
 }
 export interface RiskRuleSetting { id: import('./risk-presets').RiskPresetId; enabled: boolean; action: 'approval' | 'deny' }
-export interface ApprovalPolicy { revision: number; mode: ApprovalMode; rules: ApprovalRule[]; riskRules?: RiskRuleSetting[]; aiAssist?: boolean; uploadApprovalRequired?: Partial<Record<ApprovalMode, boolean>>; downloadApprovalRequired?: Partial<Record<ApprovalMode, boolean>> }
+export interface ChannelApprovalPolicy { revision:number; policy:ApprovalPolicy|null; defaultPolicy:ApprovalPolicy; globalPaused:boolean; globalApprovalRequired?:boolean }
+export interface PolicyScope { source:'default'|'channel'; forceApproval?:boolean; profileId?:string; pauseRevision:number }
+export interface ApprovalPolicy { forceApproval?:boolean; denyExecution?:boolean; scope?:PolicyScope; revision: number; mode: ApprovalMode; rules: ApprovalRule[]; riskRules?: RiskRuleSetting[]; aiAssist?: boolean; uploadApprovalRequired?: Partial<Record<ApprovalMode, boolean>>; downloadApprovalRequired?: Partial<Record<ApprovalMode, boolean>> }
 export interface ApprovalAiReview {
   status: 'pending' | 'complete' | 'unavailable' | 'sensitive'
   recommendation?: 'approval' | 'query'
@@ -203,6 +223,7 @@ export interface ApprovalAiReview {
   provider?: AiProtocol; model?: string; reviewedAt?: number
 }
 export interface PolicyDecision {
+  scope?:PolicyScope
   revision: number; mode: ApprovalMode; action: PolicyAction
   reason: string; matchedRules: { id: string; name: string; action: PolicyAction; risk?: 'high' }[]
   queryPlan?: { version: 1 | 2; command: string; queries?: number; labels?: number; scopeRevision?: string }

@@ -16,6 +16,7 @@ import { sshFixture } from './helpers/routes'
 import { fixtureReport } from './helpers/investigation'
 import { LocalMcpServer } from '../src/core/mcp/server'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InspectionService } from '../src/core/inspection/service'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn() })
@@ -37,7 +38,7 @@ async function fixture() {
   const input = { serverId: server.id, revision: 0, name: 'Login platform', aliases: ['lpp'], description: 'Synthetic login service', environment: 'test', deploymentPath: '/srv/lpp', runtime: 'systemd' as const, runtimeTarget: 'lpp.service', logSources: [{ id: randomUUID(), name: 'app log', kind: 'journal' as const, target: 'lpp.service', timezone: 'UTC' }] }
   const app = apps.save(input)
   const query = { serverId: server.id, applicationId: app.id, applicationRevision: app.revision, sourceId: app.logSources[0].id, requestKey: 'logs', since: '2026-10-21T00:00:00Z', until: '2026-10-21T00:30:00Z' }
-  return { directory, path, servers, server, other, operations, apps, access, app, input, query, remote, key, investigations }
+  return { directory, path, servers, server, other, operations, apps, access, app, input, query, remote, key, investigations, ai }
 }
 describe('application operational context', () => {
   it('authorizes maintained literal files and binds generic queries to app revisions before dispatch', async () => {
@@ -152,13 +153,13 @@ describe('application operational context', () => {
     expect(f.servers.store.getServer(f.other.id)).toBeDefined()
   })
   it('exposes the eight production tools over real authenticated MCP and denies cross-server metadata/log access', async () => {
-    const f = await fixture(), mcp = new LocalMcpServer(f.operations, 0, f.apps)
+    const f = await fixture(), mcp = new LocalMcpServer(f.operations, 0, f.apps, undefined, new InspectionService(f.operations,f.apps,f.investigations,f.ai))
     const endpoint = (await mcp.start()).url!, client = new Client({ name: 'synthetic', version: '1' })
     cleanup.push(() => mcp.stop()); cleanup.push(() => client.close())
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint), { requestInit: { headers: { Authorization: `Bearer ${f.access.token}` } } }))
     const unpack = (v: any) => JSON.parse(v.content[0].text)
     const runtimeTools = (await client.listTools()).tools
-    expect(runtimeTools).toHaveLength(12)
+    expect(runtimeTools).toHaveLength(15)
     expect(runtimeTools.map(t => t.name).sort()).toEqual(Object.keys(mcpToolDefinitions).sort())
     for (const tool of runtimeTools) {
       const name = tool.name as McpToolName, schema = toolInputJsonSchema(name)

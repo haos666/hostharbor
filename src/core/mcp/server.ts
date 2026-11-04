@@ -1,3 +1,4 @@
+import type { InspectionService } from '../inspection/service'
 import { FileService } from '../files/service'
 import { mcpInstructions } from '../../shared/mcp-instructions'
 import type { AddressInfo } from 'node:net'
@@ -17,7 +18,7 @@ export class LocalMcpServer {
   private url: string | null = null
   private starting = false
   private inFlight = 0
-  constructor(readonly operations: OperationService, private readonly listenPort = 43821, private readonly applications?: ApplicationService, private readonly files = new FileService(operations)) {}
+  constructor(readonly operations: OperationService, private readonly listenPort = 43821, private readonly applications?: ApplicationService, private readonly files = new FileService(operations), private readonly inspections?: InspectionService) {}
   status(): McpStatus { return { running: !!this.url, url: this.url } }
   async start(): Promise<McpStatus> {
     this.operations.servers.assertUnlocked()
@@ -48,6 +49,12 @@ export class LocalMcpServer {
             if (this.operations.authenticate(auth!.slice(7)) !== profileId) throw new AppError('ACCESS_DENIED')
             return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
           } catch (error) { return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(failure(error)) }] } }
+        }
+        if (this.inspections) {
+          const inspections = this.inspections
+          mcp.registerTool('list_inspection_plans', mcpToolDefinitions.list_inspection_plans, input => invoke(() => inspections.listPlans(profileId, input)))
+          mcp.registerTool('get_inspection_plan', mcpToolDefinitions.get_inspection_plan, ({serverId}) => invoke(() => inspections.getPlan(profileId, serverId)))
+          mcp.registerTool('submit_inspection_report', mcpToolDefinitions.submit_inspection_report, input => invoke(() => inspections.submit(profileId, input)))
         }
         mcp.registerTool('get_file_access', mcpToolDefinitions.get_file_access, ({ serverId }) => invoke(() => this.files.describe(profileId, serverId)))
         mcp.registerTool('list_remote_files', mcpToolDefinitions.list_remote_files, input => invoke(() => this.files.browse(profileId, input)))

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 — Source update (2026-11-04)
+
+See [中文 / English release notes](docs/releases/v0.2.0.md) for features, upgrade guidance and validation scope. Installer publication is separate from this source update.
+
+- Per-access approval policies with full channel command/file settings, scoped invalidation and global required-approval/denial controls; bilingual desktop configuration and schema15 downgrade protection.
+
+- Per-server Markdown inspection plans with editable offline templates, optional consented AI drafts and explicit draft review/save.
+- Scoped MCP inspection discovery/retrieval and idempotent structured agent-report submission with operation-evidence checks.
+- Bilingual inspection UI, last-check counts, paginated reports and version snapshots. Current plans are included in encrypted backup; scheduling remains external and anomalies are not automatically repaired.
+
+- Recorded-output pagination now explicitly reports saved successor pages, local output exhaustion and cleared recordings; resume guidance includes the same operation ID and exact next cursor.
+- Clarified the eight-chunk limit as per call and separated output paging from approval waiting. Existing numeric cursors remain compatible.
+
+- Encrypted `.hhbackup` export and selected restore in Settings, with independent passwords and destination-key re-encryption.
+- Duplicate/conflict/dependency preview, pinned-host conflict protection and transactional import without overwriting existing assets.
+- Restored dossiers retain historical context/corrections and explicitly omit original evidence; MCP grants, activity history and global secrets are excluded.
+- Bilingual backup UI with bounded preview pagination. macOS arm64 native Core and isolated GUI flow validated locally; Intel validation is delegated to release CI, and Windows distribution remains deferred.
+
 ## 0.1.0 — First macOS release
 
 ### Server access

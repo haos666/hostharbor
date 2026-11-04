@@ -417,7 +417,7 @@ describe('durable approved operations', () => {
     servers.store.db.exec(`CREATE TABLE profiles_v9 (id TEXT PRIMARY KEY, name TEXT NOT NULL, tokenHash TEXT NOT NULL UNIQUE, serverIds TEXT NOT NULL, mode TEXT NOT NULL, expiresAt INTEGER NOT NULL, revokedAt INTEGER, createdAt INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'mcp'); INSERT INTO profiles_v9 SELECT ${columns} FROM profiles; DROP TABLE profiles; ALTER TABLE profiles_v9 RENAME TO profiles; PRAGMA user_version=9;`)
     const upgraded = new Store(path)
     try {
-      expect(upgraded.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 13 })
+      expect(upgraded.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 15 })
       expect(upgraded.db.prepare(`SELECT ${columns} FROM profiles ORDER BY id`).all()).toEqual(before)
       expect(upgraded.db.prepare('SELECT revision,tokenSecret FROM profiles').all().every(p => p.revision === 1 && p.tokenSecret === null)).toBe(true)
       expect(upgraded.db.prepare('SELECT detail FROM operations WHERE id=?').get(op.id)!.detail).toEqual(detail)

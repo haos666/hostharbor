@@ -147,6 +147,17 @@ export class ServerService {
     } catch { throw new AppError('VAULT_CORRUPT') } finally { plaintext.fill(0) }
   }
 
+  // Internal Core-only portability boundary. Never registered as an MCP or renderer method.
+  credentialForBackup(id: string): CredentialInput & { id: string } {
+    const credential = this.store.getCredential(id)
+    if (!credential) throw new AppError('NOT_FOUND')
+    const value = this.secret(credential)
+    return credential.kind === 'password'
+      ? { id, name: credential.name, kind: 'password', password: value.password! }
+      : { id, name: credential.name, kind: 'private-key', privateKey: String(value.privateKey!), ...(value.passphrase !== undefined ? { passphrase: String(value.passphrase) } : {}) }
+  }
+  assertMaintenanceIdle(): void { this.assertUnlocked(); if (this.active.size) throw new AppError('STORAGE_BUSY') }
+
   elevationPassword(serverId: string): Buffer | undefined {
     this.unlocked()
     const server = this.store.getServer(serverId), e = server?.elevation
@@ -159,7 +170,7 @@ export class ServerService {
     if (/[\r\n\0]/.test(value)) throw new AppError('SUDO_CREDENTIAL')
     return Buffer.from(value)
   }
-  redactionValues(serverId: string): string[] {
+  redactionValues(serverId: string, allowMissing = false): string[] {
     this.unlocked()
     const server = this.store.getServer(serverId)
     if (!server) throw new AppError('NOT_FOUND')
@@ -169,7 +180,7 @@ export class ServerService {
     if (server.route.type === 'socks5' && server.route.authentication.type === 'password') ids.push(server.route.authentication.credentialId)
     return ids.flatMap((id) => {
       const credential = id ? this.store.getCredential(id) : undefined
-      if (!credential) throw new AppError('CREDENTIAL_REQUIRED')
+      if (!credential) { if (allowMissing) return []; throw new AppError('CREDENTIAL_REQUIRED') }
       const secret = this.secret(credential)
       return [secret.password, secret.passphrase, secret.privateKey, ...(typeof secret.privateKey === 'string' ? secret.privateKey.split(/\r?\n/).filter((line) => line && !line.startsWith('-----')) : [])].filter((s): s is string => typeof s === 'string' && s.length > 0)
     })

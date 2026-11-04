@@ -13,10 +13,12 @@ HostHarbor is a local desktop workspace that connects AI agents to your SSH serv
 
 - **Manage access locally.** Save SSH passwords or private keys, pin host fingerprints, and connect directly, through an SSH jump host, or through SOCKS5. Bind a separate sudo credential when needed.
 - **Give each agent its own access.** Create scoped, expiring or permanent MCP profiles with independent tokens. Edit grants or revoke an access profile without handing the agent your SSH password or private key.
-- **Choose your approval workflow.** Confirm every command, use assisted diagnostics, explicitly allow routine maintenance in permissive mode, or pause execution. Upload and download approvals are configured independently for each mode.
+- **Choose approval per access.** Configure command modes, risk rules, AI advice and upload/download approval separately for each agent. Two global switches can require approval everywhere or deny new execution.
 - **See what happened.** Use the approval center for pending/running operations and searchable history for finished operations. Replay recorded text output, with configurable retention and local storage limits.
 - **Transfer files without another tool.** Browse remote metadata and transfer single files over SFTP. Uploads use a fixed server directory and configurable size limits, with phase progress, separate timeout controls, and optional full readback verification.
 - **Give agents useful server context.** Optional AI investigations create structured, editable server and application dossiers. MCP tools can find applications and query maintained log entries instead of rediscovering deployment paths every time.
+- **Back up your assets.** Export password-encrypted `.hhbackup` files, preview conflicts and restore selected assets without overwriting existing data. [Backup guide](docs/backup.md).
+- **Maintain repeatable inspections.** Edit a server checklist, request AI suggestions and let an external agent follow the plan and submit structured reports with operation references. [Inspection guide](docs/inspections.md).
 - **Use your preferred language.** Follow the system language, or choose Simplified Chinese or English. Settings are grouped into General, Security, and Data & integrations.
 
 ![Server workspace using synthetic data](docs/images/servers.png)
@@ -58,7 +60,13 @@ AI is optional. Configure an OpenAI-compatible or Anthropic-compatible endpoint,
 
 Approval rules and AI advice do not make arbitrary shell commands safe or read-only. Permissive mode is an explicit choice to allow routine operations by default. Remote commands inherit the SSH account's permissions. Disconnecting SSH does not prove that a remote process stopped; uncertain outcomes are not automatically retried.
 
-Local activity records are not tamper-proof enterprise audit logs. The vault does not protect against every compromised-OS or same-user attack. Portable vault export, automatic updates, resumable transfers and recursive directory synchronization are not included. Read [SECURITY.md](SECURITY.md) before connecting important assets.
+Local activity records are not tamper-proof enterprise audit logs. The vault does not protect against every compromised-OS or same-user attack. Automatic updates, resumable transfers and recursive directory synchronization are not included. Read [SECURITY.md](SECURITY.md) before connecting important assets.
+
+## v0.2.0 source update
+
+The v0.2.0 source update adds encrypted backup/restore, lightweight server inspections, per-access approval with global controls, and explicit MCP output-pagination guidance. [中文 / English update and upgrade notes](docs/releases/v0.2.0.md).
+
+The download links above still refer to published v0.1.0. A v0.2.0 source branch or PR is not a published installer release. New storage uses schema15; preserve a pre-upgrade data copy for rollback. Windows distribution remains deferred.
 
 ## Build and contribute
 

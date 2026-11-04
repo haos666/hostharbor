@@ -109,7 +109,7 @@ describe('vault and local persistence', () => {
     expect(service.listServers()[0].credentialId).toBeNull()
     expect(service.listServers()[0].route).toEqual({ type: 'direct' })
     expect(store.db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
-    expect(store.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 13 })
+    expect(store.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 15 })
   })
   it('rejects locked mutations, malformed input and invalid private keys', () => {
     const { service } = setup()

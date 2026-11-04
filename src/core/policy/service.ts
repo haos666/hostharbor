@@ -1,6 +1,6 @@
 import { permissiveRisks } from './permissive'
 import { z } from 'zod'
-import type { ApprovalPolicy, PolicyDecision } from '../../shared/contracts'
+import type { ApprovalPolicy, ChannelApprovalPolicy, PolicyDecision } from '../../shared/contracts'
 import { defaultRiskRules, riskPresets } from '../../shared/risk-presets'
 import { AppError } from '../../shared/errors'
 import { idSchema, parse } from '../validation'
@@ -19,7 +19,7 @@ const ruleSchema = z.object({
 const riskSettingSchema = z.object({ id: z.enum(['file-removal', 'disk-write', 'power-control', 'permissions']), enabled: z.boolean(), action: z.enum(['approval', 'deny']) }).strict()
 const riskSettingsSchema = z.array(riskSettingSchema).length(4).refine((rules) => new Set(rules.map((r) => r.id)).size === 4)
 const fileApprovalModesSchema = z.object({ 'all-approval': z.boolean().optional(), assisted: z.boolean().optional(), permissive: z.boolean().optional(), rules: z.boolean().optional(), paused: z.boolean().optional() }).strict()
-const policySchema = z.object({ revision: z.number().int().nonnegative().safe(), mode: z.enum(['all-approval', 'assisted', 'permissive', 'rules', 'paused']), rules: z.array(ruleSchema).max(100), riskRules: riskSettingsSchema.optional(), aiAssist: z.boolean().optional(), uploadApprovalRequired: fileApprovalModesSchema.optional(), downloadApprovalRequired: fileApprovalModesSchema.optional() }).strict()
+const policySchema = z.object({ forceApproval:z.boolean().optional(), denyExecution:z.boolean().optional(), revision: z.number().int().nonnegative().safe(), mode: z.enum(['all-approval', 'assisted', 'permissive', 'rules', 'paused']), rules: z.array(ruleSchema).max(100), riskRules: riskSettingsSchema.optional(), aiAssist: z.boolean().optional(), uploadApprovalRequired: fileApprovalModesSchema.optional(), downloadApprovalRequired: fileApprovalModesSchema.optional() }).strict()
   .refine((p) => new Set(p.rules.map((r) => r.id)).size === p.rules.length)
 
 // Conservative keyword hints only: never used to grant access or claim shell safety.
@@ -30,8 +30,8 @@ const riskPatterns = {
   'permissions': /(?:^|[^a-zA-Z0-9_.-])(?:chmod|chown|chgrp)(?=$|[^a-zA-Z0-9_.-])/u,
 }
 // Full strings are compared without trimming, shell parsing, globbing or classification.
-export function evaluatePolicy(policy: ApprovalPolicy, input: { profileId: string; serverId: string; command: string; cwd: string; verifiedLogQuery?: boolean; queryScope?: QueryScope }, now = Date.now()): PolicyDecision {
-  const base = { revision: policy.revision, mode: policy.mode, matchedRules: [] }
+function evaluateChannelPolicy(policy: ApprovalPolicy, input: { profileId: string; serverId: string; command: string; cwd: string; verifiedLogQuery?: boolean; queryScope?: QueryScope }, now = Date.now()): PolicyDecision {
+  const base = { ...policyDecisionBase(policy), matchedRules: [] }
   if (policy.mode === 'paused') return { ...base, action: 'deny', reason: '已暂停新命令执行' }
   if (policy.mode === 'all-approval') return { ...base, action: 'approval', reason: '全部命令需要人工审批' }
   const matchedRules: PolicyDecision['matchedRules'] = policy.rules.filter((r) => r.enabled && (r.expiresAt === null || r.expiresAt > now)
@@ -71,8 +71,14 @@ export function evaluatePolicy(policy: ApprovalPolicy, input: { profileId: strin
   return { ...base, action, matchedRules, reason: matchedRules.length ? `${matchedRules.some((r) => r.risk === 'high') ? '检测到疑似高风险操作；' : ''}匹配规则，按${action === 'deny' ? '拒绝' : action === 'approval' ? '审批' : '放行'}处理（拒绝优先，其次审批）` : '没有匹配规则，默认人工审批' }
 }
 
+export function evaluatePolicy(policy:ApprovalPolicy,input:Parameters<typeof evaluateChannelPolicy>[1],now=Date.now()):PolicyDecision {
+ const decision=evaluateChannelPolicy(policy,input,now)
+ return policy.scope?.forceApproval&&decision.action==='allow'?{...decision,action:'approval',reason:'全部命令需要人工审批'}:decision
+}
+export function policyDecisionBase(policy:ApprovalPolicy){return {revision:policy.revision,mode:policy.mode,...(policy.scope?{scope:policy.scope}:{})}}
+export interface PolicyChange {profileId?:string;globalPauseChanged?:boolean}
 export class PolicyService {
-  readonly changed = new Set<() => void>()
+  readonly changed = new Set<(change:PolicyChange) => void>()
   constructor(private readonly servers: ServerService, private readonly aiConfigured: () => boolean = () => false) {}
   get(): ApprovalPolicy {
     this.servers.assertUnlocked()
@@ -85,6 +91,51 @@ export class PolicyService {
       if (policy.revision !== row.revision) throw new AppError('STORAGE_FAILED')
       return policy
     } catch { throw new AppError('STORAGE_FAILED') } finally { data.fill(0) }
+  }
+  private metadata<T>(key:string):T|null {
+    const row=this.servers.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)
+    if(!row)return null
+    const plain=this.servers.reveal(key,row.value as Uint8Array)
+    try{return JSON.parse(plain.toString()) as T}catch{throw new AppError('STORAGE_FAILED')}finally{plain.fill(0)}
+  }
+  private writeMetadata(key:string,value:unknown){const bytes=Buffer.from(JSON.stringify(value));try{this.servers.store.db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,this.servers.protect(key,bytes))}finally{bytes.fill(0)}}
+  private channelRecord(profileId:string):{revision:number;policy:ApprovalPolicy|null}{
+    const value=this.metadata<{revision:number;policy:ApprovalPolicy|null}>('approval-channel:v1:'+profileId)
+    if(!value)return {revision:0,policy:null}
+    try{const result=z.object({revision:z.number().int().nonnegative().safe(),policy:policySchema.nullable()}).strict().parse(value);if(result.policy&&result.policy.revision!==result.revision)throw Error();return result}catch{throw new AppError('STORAGE_FAILED')}
+  }
+  hasOverride(profileId:string){this.servers.assertUnlocked();return this.channelRecord(profileId).policy!==null}
+  effective(profileId:string):ApprovalPolicy {
+    const defaults=this.get(),record=this.channelRecord(profileId),policy=record.policy??defaults
+    const pauseRevision=this.metadata<number>('approval-pause-epoch:v1')??0
+    if(!Number.isSafeInteger(pauseRevision)||pauseRevision<0)throw new AppError('STORAGE_FAILED')
+    return {...policy,mode:(!!defaults.denyExecution||defaults.mode==='paused')?'paused':policy.mode,scope:{forceApproval:!!defaults.forceApproval,source:record.policy?'channel':'default',...(record.policy?{profileId}:{}),pauseRevision}}
+  }
+  channel(profileId:unknown):ChannelApprovalPolicy {
+    const id=parse(idSchema,profileId);this.get()
+    const row=this.servers.store.db.prepare("SELECT id FROM profiles WHERE id=? AND source='mcp' AND revokedAt IS NULL AND deletedAt IS NULL").get(id)
+    if(!row)throw new AppError('ACCESS_DENIED')
+    const {forceApproval,denyExecution,...defaultPolicy}=this.get()
+    return {...this.channelRecord(id),defaultPolicy,globalPaused:!!denyExecution||defaultPolicy.mode==='paused',globalApprovalRequired:!!forceApproval}
+  }
+  saveChannel(raw:unknown):ChannelApprovalPolicy {
+    const input=parse(z.object({profileId:idSchema,revision:z.number().int().nonnegative().safe(),policy:policySchema.nullable(),permissiveConfirmed:z.boolean().optional()}).strict(),raw),current=this.channel(input.profileId)
+    if(current.revision!==input.revision)throw new AppError('POLICY_CONFLICT')
+    if(input.policy){
+      if(input.policy.forceApproval!==undefined||input.policy.denyExecution!==undefined)throw new AppError('INVALID_INPUT')
+      if(input.policy.revision!==input.revision)throw new AppError('POLICY_CONFLICT')
+      const old=current.policy??current.defaultPolicy
+      if(input.policy.mode==='permissive'&&old.mode!=='permissive'&&!input.permissiveConfirmed)throw new AppError('PERMISSIVE_CONFIRMATION')
+      if(input.policy.aiAssist&&!old.aiAssist&&!this.aiConfigured())throw new AppError('AI_NOT_CONFIGURED')
+      for(const rule of input.policy.rules){
+        if(rule.profileIds.some(id=>id!==input.profileId))throw new AppError('INVALID_INPUT')
+        for(const id of rule.serverIds)if(!this.servers.store.getServer(id)&&!old.rules.some(r=>r.serverIds.includes(id)))throw new AppError('INVALID_INPUT')
+      }
+    }
+    const revision=current.revision+1
+    this.writeMetadata('approval-channel:v1:'+input.profileId,{revision,policy:input.policy?{...input.policy,revision}:null})
+    for(const listener of this.changed)listener({profileId:input.profileId})
+    return this.channel(input.profileId)
   }
   save(raw: unknown): ApprovalPolicy {
     const { permissiveConfirmed, ...input } = parse(policySchema.extend({ permissiveConfirmed: z.boolean().optional() }), raw), current = this.get()
@@ -101,10 +152,13 @@ export class PolicyService {
     const next = { ...input, revision: input.revision + 1 }, data = Buffer.from(JSON.stringify(next))
     try {
       const encrypted = this.servers.protect('approval-policy:v1', data)
+      this.servers.store.db.exec('BEGIN IMMEDIATE')
       const updated = this.servers.store.db.prepare('UPDATE approval_policy SET revision=?,detail=? WHERE id=1 AND revision=?').run(next.revision, encrypted, current.revision)
       if (updated.changes !== 1) throw new AppError('POLICY_CONFLICT')
-    } catch (e) { if (e instanceof AppError) throw e; throw new AppError('STORAGE_FAILED') } finally { data.fill(0) }
-    for (const listener of this.changed) listener()
+      if(((current.mode==='paused')!==(next.mode==='paused')||!!current.forceApproval!==!!next.forceApproval||(current.denyExecution??current.mode==='paused')!==(next.denyExecution??next.mode==='paused')))this.writeMetadata('approval-pause-epoch:v1',(this.metadata<number>('approval-pause-epoch:v1')??0)+1)
+      this.servers.store.db.exec('COMMIT')
+    } catch (e) { if(this.servers.store.db.isTransaction)this.servers.store.db.exec('ROLLBACK'); if (e instanceof AppError) throw e; throw new AppError('STORAGE_FAILED') } finally { data.fill(0) }
+    for (const listener of this.changed) listener({globalPauseChanged:((current.mode==='paused')!==(next.mode==='paused')||!!current.forceApproval!==!!next.forceApproval||(current.denyExecution??current.mode==='paused')!==(next.denyExecution??next.mode==='paused'))})
     return next
   }
 }

@@ -2,6 +2,18 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { HostHarborApi, ApprovalReminder } from '../shared/contracts'
 
 const api: HostHarborApi = {
+  getInspectionWorkspace: id => ipcRenderer.invoke('inspection:workspace', id),
+  saveInspectionPlan: input => ipcRenderer.invoke('inspection:save', input),
+  draftInspectionPlan: input => ipcRenderer.invoke('inspection:draft', input),
+  listInspectionReports: input => ipcRenderer.invoke('inspection:reports', input),
+  getInspectionReport: input => ipcRenderer.invoke('inspection:report', input),
+  deleteInspectionReport: input => ipcRenderer.invoke('inspection:delete-report', input),
+  backupSummary: () => ipcRenderer.invoke('backup:summary'),
+  chooseBackupFile: () => ipcRenderer.invoke('backup:choose'),
+  exportBackup: password => ipcRenderer.invoke('backup:export', password),
+  previewBackup: input => ipcRenderer.invoke('backup:preview', input),
+  commitBackup: input => ipcRenderer.invoke('backup:commit', input),
+  cancelBackup: () => ipcRenderer.invoke('backup:cancel'),
   getLanguage: () => ipcRenderer.invoke('language:get'),
   saveLanguage: locale => ipcRenderer.invoke('language:save', locale),
   onLanguageChanged: callback => { const listener = (_event: Electron.IpcRendererEvent, settings: import('../shared/i18n').LanguageSettings) => callback(settings); ipcRenderer.on('language:changed', listener); return () => { ipcRenderer.removeListener('language:changed', listener) } },
@@ -41,6 +53,8 @@ const api: HostHarborApi = {
   clearOperationOutput: (id) => ipcRenderer.invoke('recordings:clear', id),
   deleteOperation: (id) => ipcRenderer.invoke('history:delete', id),
   reclaimRecordingSpace: () => ipcRenderer.invoke('recordings:reclaim'),
+  getChannelApprovalPolicy: profileId => ipcRenderer.invoke('policy:channel-get',profileId),
+  saveChannelApprovalPolicy: input => ipcRenderer.invoke('policy:channel-save',input),
   getApprovalPolicy: () => ipcRenderer.invoke('policy:get'),
   saveApprovalPolicy: (input) => ipcRenderer.invoke('policy:save', input),
   previewApprovalPolicy: (input) => ipcRenderer.invoke('policy:preview', input),

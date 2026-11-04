@@ -83,7 +83,7 @@ describe('exact approval policy', () => {
     const servers = new ServerService(new Store(path)); cleanup.push(() => servers.close()); servers.unlock(randomBytes(32))
     expect(servers.store.db.prepare('SELECT id,mode FROM profiles').get()).toMatchObject({ id, mode: 'time-limited' })
     expect(new PolicyService(servers).get().mode).toBe('all-approval')
-    expect(servers.store.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 13 })
+    expect(servers.store.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 15 })
   })
   it('rejects broad automatic allow, duplicate IDs, missing scopes and rolls back a failed save', () => {
     const servers = new ServerService(new Store(':memory:')); cleanup.push(() => servers.close()); servers.unlock(randomBytes(32))

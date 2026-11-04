@@ -1,4 +1,5 @@
 import { DesktopApprovalNotifications } from './notifications/service'
+import { DesktopBackup } from './backup'
 import { IdleLockService } from './idle-lock'
 import { copyMcpInstallation } from './mcp-installation'
 import { app, BrowserWindow, clipboard, ipcMain, powerMonitor, dialog } from 'electron'
@@ -77,6 +78,10 @@ else {
     keys = new KeyStore(directory)
     core = new CoreClient(directory)
     security = new SecurityService(keys, core)
+    const backup = new DesktopBackup(core, () => security.lockRevision, {
+      async save() { const result = await dialog.showSaveDialog(window!, { title: msg('backup.export'), defaultPath: `HostHarbor-${new Date().toISOString().slice(0,10)}.hhbackup`, filters: [{ name: 'HostHarbor', extensions: ['hhbackup'] }] }); return result.canceled ? null : result.filePath ?? null },
+      async open() { const result = await dialog.showOpenDialog(window!, { title: msg('backup.import'), properties: ['openFile'], filters: [{ name: 'HostHarbor', extensions: ['hhbackup'] }] }); return result.canceled ? null : result.filePaths[0] ?? null },
+    })
     idleLock = new IdleLockService(directory, core, () => security.lockRevision, () => powerMonitor.getSystemIdleTime(), lockVault)
     ipcMain.handle('app:get-status', async (event): Promise<AppStatus> => {
       assertSender(event)
@@ -85,6 +90,18 @@ else {
       return { backgroundMcp: state.backgroundMcp, pendingApprovals: state.pendingApprovals, version: app.getVersion(), core: core.state, vault: revision !== security.lockRevision ? 'locked' : state.vault === 'not-configured' && keys.mode !== 'not-configured' ? 'locked' : state.vault, lockRevision: security.lockRevision, security: keys.mode, mcp: state.mcp.running ? 'running' : 'stopped' }
     })
     const handlers: Record<string, (payload: unknown) => Promise<unknown>> = {
+      'inspection:workspace': p => core.call('getInspectionWorkspace', p),
+      'inspection:save': p => core.call('saveInspectionPlan', p),
+      'inspection:draft': p => core.call('draftInspectionPlan', p),
+      'inspection:reports': p => core.call('listInspectionReports', p),
+      'inspection:report': p => core.call('getInspectionReport', p),
+      'inspection:delete-report': p => core.call('deleteInspectionReport', p),
+      'backup:summary': () => core.call('backupSummary'),
+      'backup:choose': () => backup.choose(),
+      'backup:export': password => backup.export(password),
+      'backup:preview': payload => backup.preview(payload),
+      'backup:commit': payload => backup.commit(payload as import('../shared/backup').BackupSelection),
+      'backup:cancel': () => backup.cancel(),
       'language:get': async () => syncLanguage(),
       'language:save': async payload => {
         language.save(payload)
@@ -130,6 +147,7 @@ else {
       'recordings:status': () => core.call('getRecordingStorage'), 'recordings:settings': (p) => core.call('saveRecordingSettings', p),
       'recordings:clean': () => core.call('cleanRecordings'), 'recordings:clear': (p) => core.call('clearOperationOutput', p),
       'history:delete': (p) => core.call('deleteOperation', p), 'recordings:reclaim': () => core.call('reclaimRecordingSpace'),
+      'policy:channel-get': payload => core.call('getChannelApprovalPolicy',payload), 'policy:channel-save': payload => core.call('saveChannelApprovalPolicy',payload),
       'policy:get': () => core.call('getApprovalPolicy'), 'policy:save': (payload) => core.call('saveApprovalPolicy', payload),
       'policy:preview': (payload) => core.call('previewApprovalPolicy', payload),
       'operations:list': () => core.call('listOperations'), 'operations:decide': (payload) => core.call('decideOperation', payload),

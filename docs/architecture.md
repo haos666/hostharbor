@@ -416,3 +416,50 @@ FileService在审批后的本机私有快照上做4×64KiB有界分块上传，�
 审批策略增加可选uploadApprovalRequired映射，与downloadApprovalRequired一样按模式保存；旧数据缺失时默认true。模式卡片仅负责选择模式，下方统一提供当前模式的上传/下载审批勾选项。FileService在统一OperationService中按请求方向读取对应值，false自动执行、true人工，暂停优先拒绝；全命令审批模式的文件传输也尊重明确的独立授权。
 
 自动上传仍绑定完整路径、源身份、设置版本/大小与策略修订，保存执行意图并复查授权，不扩大固定远端目录、不覆盖或执行内容。策略修改沿用未派发请求失效机制，不自动批准已有请求。MCP报告uploadRequiresApproval/downloadRequiresApproval和uploadsPaused/downloadsPaused，不再声称所有上传始终人工；桌面、协议说明和中英文资源保持一致。
+
+
+## ADR042：便携资产备份与事务恢复
+
+Core backup 模块使用固定版本 HHBACKUP v1 头、16 字节随机 salt、scrypt(N=32768,r=8,p=3,maxmem=64MiB)及既有 AES-256-GCM 原语；每次使用独立随机 nonce，版本/salt 绑定 AAD。只将逻辑记录放入认证加密载荷，文件上限32MiB；不复制数据库或OS包装密钥，不写明文临时包。导出同目录0600密文临时文件，写完fsync、重检目标及解锁会话后重命名发布。
+
+Main 原生文件对话框产生路径，Renderer 只得到短期 opaque 文件ID/显示名、计数和资产预览，不允许传任意路径。六个固定桌面IPC不注册MCP工具；桌面门禁独立于后台MCP持钥。Core校验schema/数量/引用/私钥/指纹，不求值脚本或执行SSH。预览会话绑定文件摘要、资产快照、桌面revision及10分钟期限，锁定或关闭时尽力清除内存材料。
+
+导入保留已有数据、跳过完整语义重复、同名冲突可另存；不同主机pin阻止导入及其跳板依赖，不覆盖身份记录。提交前重查所有门禁、文件与资产状态，并要求无待审批/执行/连接测试/浏览/调查。同步事务内重新分配UUID、映射登录/跳板/SOCKS/sudo引用，用目标主密钥重加密，失败整体回滚；事件循环在检查至提交期间不让出。
+
+备份包括凭证、服务器、使用中的pin、完成档案/人工修正、应用日志入口、文件设置；不带MCP授权/Token、执行历史/回放/原始采集/文件内容、应用安全证明、AI Key和全局设置。恢复档案清除原证据引用、将无证据结论降为unknown，标记restoredAt及stale；人工修正保留，应用旧版本失配状态保持。恢复不连接远端、不授予MCP权限。独立密码仅非空，无用户可见的长度/复杂度门槛；资源上限不作强度规则。JS对象/字符串清除为尽力而为。
+
+
+## ADR043：输出分页与命令生命周期分离
+
+read_output 在统一 OperationService 中逐次重检归属与授权，查询最多9条元数据作为一条前瞻，仅解密/返回前8条，hasMore准确表示当前已保存的后续片段。nextCursor仍是数字序号（包括末页），不破坏旧调用方；不合并原始流片段或扩大原录制大小限制。
+
+新增outputComplete表示本地采集已结束、当前游标后保留片段耗尽；终态但本地active尚未退出时不能提前标记完成。unknown仍保留执行不确定性，此字段不保证原输出全部录制或远端已停。outputAvailability区分retained与cleared，清理不等同空输出或成功读完。
+
+分页响应的agentGuidance与实际续接一致：有后页给read_output和准确游标；运行中无后页给get_operation及间隔；末页stop、resume=null；unknown末页inspect且不自动重跑。待审批ask_user不因读空页而重置。工具描述和initialize instructions明确每次8块、审批等待与分页分离，以及客户端明确拒绝后停止。更新服务不保证外部审批接受，客户端可能需刷新缓存。
+
+
+## ADR044：版本化巡检手册与外部执行报告
+
+InspectionService不执行SSH，仅通过已有ApplicationService/InvestigationService获取保存的上下文，以及OperationService验证接入和报告证据；三个MCP工具只发现/获取手册和提交报告，桌面固定IPC维护手册和查看/删除报告。Core保持Electron无关，Renderer只展示安全Markdown子集，不解析HTML/图片/外链。AI草稿必须有显式发送同意，仅发送已保存且过滤的档案及应用上下文，模型只能返回文档；不新建调查、不自动覆盖保存。桌面锁revision、AI修订、服务器/档案/应用上下文与手册revision在返回前重检。
+
+数据库v14新增inspection_plans和inspection_reports，内容按serverId/revision或reportId绑定AAD加密；服务器外键级联删除。手册二级标题生成版本内check-N标识，最多40项、24000字符；最近50版本保留，报告自带原手册快照。保存使用contextDigest和revision做乐观锁，应用引用使用稳定ID/修订，历史来源变化只作stale提示，不伪装实时发现。
+
+报告提交按认证profile定位身份，不接受客户端伪造身份。验证手册摘要/服务器版本、检查时段、全部且唯一checkId、同接入同服务器操作及派发/终态/退出码；正常需成功操作，异常需实际派发后结束。连接失败、缺证据、待审批或unknown不能充当正常。该验证不证明结论内容或所有MD步骤正确，界面明确标为agent-authored。汇总状态与每类数量由服务计算；收到时上下文变化另标复核。
+
+报告按profileId/requestKey幂等，不同内容拒绝；删除仅清除加密内容，保留去重标识，最多500份未删除报告/服务器并分页读取，不静默过期删除。当前手册随资产备份导出，恢复重映射标准应用引用并标stale；报告历史不导出。首次升级前保留本机数据库副本以支持包/存储一起回退，不在旧包上假装支持v14。无内置调度、通知或自动修复；外部调度仍受原授权、审批、锁定和输出分页规则约束。
+
+## ADR045：按认证接入解析审批策略
+
+PolicyService保留全局默认策略，新增以approval-channel:v1:<profileId>绑定AAD的加密metadata记录，保存递增revision及完整独立策略或null继承标记。所有编辑校验source=mcp且未撤销/删除，使用乐观锁；内部desktop-ai/desktop-files不开放独立配置。规则限定本接入，复制默认策略时过滤不适用的跨接入规则。全局/渠道AI建议仍只是建议。
+
+统一effective(profileId)供命令、提权、文件审批/描述、目录浏览及派发前重检使用。策略决策快照保存默认/渠道来源和独立修订、全局暂停epoch。全局默认mode=paused优先于所有渠道；暂停/恢复在默认策略事务中递增epoch，其他默认修改不改变独立渠道决策。不得依赖MCP自报客户端名称。无新增MCP策略管理接口，固定桌面IPC沿用Main发送方与Core桌面解锁门禁。
+
+策略changed事件携带影响渠道或全局暂停变化，仅作废相关未派发请求、相关浏览与AI建议；已派发任务保持已有生命周期。恢复继承不清除配置修订，不复活已作废请求。历史保留原策略来源及版本。存储schema15阻止旧二进制忽略新授权语义，升级前保留本机数据库副本；资产备份继续排除授权及策略。
+
+## ADR046：详细策略归渠道，系统只做全局覆盖
+
+取代ADR045的“默认/独立”UI选择：渠道打开即显示完整模式、文件审批、规则和AI建议。旧接入沿用旧有效配置作为兼容初值，首次修改保存为渠道策略，不因UI调整自动改变权限。全局详细配置移出界面，保留旧API用于兼容及软件内部初值。
+
+加密全局ApprovalPolicy新增可选forceApproval/denyExecution。旧mode=paused仍按全局拒绝处理；界面关闭该旧状态时在同一次保存中切回保守all-approval初值。deny优先，force只将原allow转换为approval，不能将渠道deny变为可审批放行。SFTP描述和实际决定同时强制上传/下载审批；目录元数据不生成审批任务，deny仍阻止浏览。全局force时不启动AI审批建议。
+
+开关变更与全局策略保存同事务递增原控制epoch，changed事件覆盖全部接入未派发请求，关闭开关不复用旧审批。快照scope增加forceApproval用于派发前比较；渠道接口拒绝传入全局开关，避免误将全局配置写入渠道。Schema15及旧策略严格字段校验阻止旧版忽略限制，回退需匹配数据库。无新增MCP管理能力。

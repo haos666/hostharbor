@@ -13,7 +13,7 @@ export class Store {
       this.db = new DatabaseSync(path)
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;')
       const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-      if (version > 13) throw new AppError('STORAGE_FAILED')
+      if (version > 15) throw new AppError('STORAGE_FAILED')
       if (version === 0) this.db.exec(`
         BEGIN IMMEDIATE;
         CREATE TABLE metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL);
@@ -115,6 +115,16 @@ export class Store {
         PRAGMA user_version=13;
         COMMIT;
       `)
+      if (version < 14) this.db.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE IF NOT EXISTS inspection_plans (serverId TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, revision INTEGER NOT NULL, detail BLOB NOT NULL, PRIMARY KEY(serverId,revision));
+        CREATE TABLE IF NOT EXISTS inspection_reports (id TEXT PRIMARY KEY, serverId TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, profileId TEXT NOT NULL, requestKey TEXT NOT NULL, createdAt INTEGER NOT NULL, detail BLOB, UNIQUE(profileId,requestKey));
+        CREATE INDEX IF NOT EXISTS inspection_reports_history ON inspection_reports(serverId,createdAt DESC,id);
+        PRAGMA user_version=14;
+        COMMIT;
+      `)
+      // Older binaries must not silently ignore channel-specific restrictions.
+      if(version<15)this.db.exec('PRAGMA user_version=15')
       if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     } catch (error) { throw error instanceof AppError ? error : new AppError('STORAGE_FAILED') }
   }

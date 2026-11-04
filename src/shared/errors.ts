@@ -1,4 +1,14 @@
 export const messages = {
+  INSPECTION_DOCUMENT: '巡检清单需包含二级标题（##），手工最多 40 项，AI 建议最多 6 项；请检查关联应用，并移除凭证或秘密。',
+  INSPECTION_EVIDENCE: '巡检项或操作证据不匹配；请核对手册版本、目标、时间和执行状态，未完成的检查不能报正常。',
+  BACKUP_PASSWORD: '请输入备份密码。',
+  BACKUP_INVALID: '备份密码不正确，或文件格式、内容已损坏或不受支持。',
+  BACKUP_LIMIT: '备份超过支持的大小或资产数量上限。',
+  BACKUP_BUSY: '备份操作正在进行，请稍后重试。',
+  BACKUP_CHANGED: '文件、资产或解锁状态已变化，请重新预览。',
+  BACKUP_SESSION: '导入预览已失效，请重新选择文件并预览。',
+  BACKUP_DEPENDENCY: '请同时选择所需凭证和跳板服务器，或取消依赖它们的服务器。',
+
   FILE_IDLE_TIMEOUT: '文件传输或校验持续无进展，已停止本次任务；请检查网络及阶段记录，不自动重传。',
   FILE_TOTAL_TIMEOUT: '文件任务达到设置的总时长上限，已停止；请核对目标与临时文件后再决定下一步。',
   FILE_BROWSE_PAUSED: '已暂停服务器访问，请调整审批策略后再浏览目录。',

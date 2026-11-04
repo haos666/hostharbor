@@ -83,5 +83,14 @@
   "INVALID_PRIVATE_KEY": "errors.invalidPrivateKeyFormatOrPassphrase",
   "CORE_UNAVAILABLE": "errors.coreUnavailableRestartTheAppAndRetry",
   "STORAGE_FAILED": "errors.localStorageUnavailableCheckDirectoryPermissionsAndDisk",
-  "INTERNAL": "errors.operationIncompleteRetryWhenAppropriateNoAutomaticReconnection"
+  "INTERNAL": "errors.operationIncompleteRetryWhenAppropriateNoAutomaticReconnection",
+  "BACKUP_PASSWORD": "errors.BACKUP_PASSWORD",
+  "BACKUP_INVALID": "errors.BACKUP_INVALID",
+  "BACKUP_LIMIT": "errors.BACKUP_LIMIT",
+  "BACKUP_BUSY": "errors.BACKUP_BUSY",
+  "BACKUP_CHANGED": "errors.BACKUP_CHANGED",
+  "BACKUP_SESSION": "errors.BACKUP_SESSION",
+  "BACKUP_DEPENDENCY": "errors.BACKUP_DEPENDENCY",
+  "INSPECTION_DOCUMENT": "errors.INSPECTION_DOCUMENT",
+  "INSPECTION_EVIDENCE": "errors.INSPECTION_EVIDENCE"
 }
