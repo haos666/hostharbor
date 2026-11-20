@@ -32,10 +32,10 @@ HostHarbor 是一个运行在本机的服务器工作台。面向个人服务器
 
 | Mac 类型 | 下载 |
 | --- | --- |
-| Apple Silicon（M 系列） | [arm64 安装包](https://github.com/haos666/hostharbor/releases/download/v0.1.0/HostHarbor-0.1.0-mac-arm64.dmg) |
-| Intel | [x64 安装包](https://github.com/haos666/hostharbor/releases/download/v0.1.0/HostHarbor-0.1.0-mac-x64.dmg) |
+| Apple Silicon（M 系列） | [arm64 安装包](https://github.com/haos666/hostharbor/releases/download/v0.3.0/HostHarbor-0.3.0-mac-arm64.dmg) |
+| Intel | [x64 安装包](https://github.com/haos666/hostharbor/releases/download/v0.3.0/HostHarbor-0.3.0-mac-x64.dmg) |
 
-[发布页](https://github.com/haos666/hostharbor/releases/tag/v0.1.0)同时提供 ZIP 和 SHA-256 校验文件。首批安装包**尚未完成 Developer ID 签名及公证**，macOS 可能阻止打开。请先核对来源、发布说明和校验值，再自行决定是否通过系统安全设置打开；不要全局关闭 Gatekeeper。
+[发布页](https://github.com/haos666/hostharbor/releases/tag/v0.3.0)同时提供 ZIP 和 SHA-256 校验文件。安装包**尚未完成 Developer ID 签名及公证**，macOS 可能阻止打开。请先核对来源、发布说明和校验值，再自行决定是否通过系统安全设置打开；不要全局关闭 Gatekeeper。
 
 Windows 安装包留到后续版本；仓库保留 Windows 相关代码，不代表本次已经完成 Windows 发布验收。
 
@@ -71,7 +71,9 @@ AI 不是使用前提。可在设置中配置 OpenAI 兼容或 Anthropic 兼容�
 
 ![使用合成数据的离线巡检主题预览](resources/report-previews/aurora.jpg)
 
-上方下载表明确指向已经发布的 **v0.1.0**；**v0.3.0 代码可用不代表新版安装包已经发布**，实际下载以 Releases 为准。当前存储仍为 schema15，升级前保留原应用数据副本，以便使用匹配版本回退。旧报告没有指标时保持可读，不会填造数值；外部 MCP 客户端需重新连接刷新工具定义。Windows 安装包继续延期。
+**v0.3.0 已提供 macOS M 系列和 Intel 安装包**，[发布页](https://github.com/haos666/hostharbor/releases/tag/v0.3.0)包含 DMG、ZIP 及分架构 SHA-256 校验文件；两种架构均已通过[发布 CI](https://github.com/haos666/hostharbor/actions/runs/44703013580)。
+
+当前存储为 schema15，升级前保留原应用数据副本，以便使用匹配版本回退。旧报告没有指标时保持可读，不会填造数值；外部 MCP 客户端需重新连接刷新工具定义。Windows 安装包继续延期。
 
 ## 开发与贡献
 

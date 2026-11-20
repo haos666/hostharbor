@@ -5,10 +5,10 @@
 - [x] Consolidate the pending v0.2.0 public-history commit and completed local features.
 - [x] Bump app/MCP metadata to 0.3.0; refresh bilingual README, changelog, screenshots and upgrade notes.
 - [x] Final checks, native candidate validation and public-content review (978 checks, native Core/OS/SSH/SFTP/MCP; 141 public files reviewed).
-- [ ] Push branch, pass both macOS CI jobs and merge to main.
-- [ ] Reconcile superseded PR/tracking and record delivery links.
+- [x] Push branch, pass both macOS CI jobs and merge to main.
+- [x] Reconcile superseded PR/tracking and record delivery links.
 
-Installer publication is distinct from source merge; Windows remains deferred. All older pending GitHub-delivery entries are consolidated here.
+v0.3.0 macOS DMG/ZIP/checksum assets are published after dual-architecture CI; Windows remains deferred. All older pending GitHub-delivery entries are consolidated here.
 
 ## v0.2.0 batch delivery — 2026-11-04
 
@@ -281,3 +281,5 @@ Start new feature and internationalization branches from current `origin/main`. 
 交付收尾改进：UI 小改动完成规定 check 与相关原生验收后，直接交付；不因无关检查继续追加整套回归。原生测试命令的运行中/完成、打包完成/已安装分别报告，退出后及时完成安装与最终回复。
 
 2026-11-20 release candidate: [tracking #5](https://github.com/haos666/hostharbor/issues/5) consolidates #3/#4 and all pending local GitHub handoffs. Final app/MCP version 0.3.0; 978 checks plus native Core validation passed. Public-content/link scan passed; only origin/main ancestry will be pushed. Next: release PR, both macOS CI jobs, then merge. Installer publication remains separate.
+
+2026-11-20 delivery complete: [PR #6](https://github.com/haos666/hostharbor/pull/6) merged (f463cd78e18711761e1ecdb016be8a996bccb4c8); v0.3.0 tag and [macOS release](https://github.com/haos666/hostharbor/releases/tag/v0.3.0) published. [Both CI jobs](https://github.com/haos666/hostharbor/actions/runs/44703013580) passed; downloaded installer checksums match CI manifests. Six release assets, bilingual README/downloads, changelog and upgrade notes are synchronized. PR #4 is superseded and all earlier pending GitHub delivery is consolidated into #5. Final docs-only follow-up records outcomes without repeating runtime tests/CI.

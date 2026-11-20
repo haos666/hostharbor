@@ -2,7 +2,7 @@
 
 ## v0.3.0 release batch — 2026-11-20
 
-Current source version: 0.3.0. This consolidates the pending v0.2.0 PR and inspection dashboards/review, tags/quick filters, shared proxies, key-path import and UI work. English/Chinese README and [upgrade notes](releases/v0.3.0.md) distinguish implemented features from published v0.1.0 downloads. Historical local handoffs remain as evidence; pending GitHub checkboxes are superseded by this batch. Final validation and delivery are recorded below.
+Current source version: 0.3.0. This consolidates the pending v0.2.0 PR and inspection dashboards/review, tags/quick filters, shared proxies, key-path import and UI work. English/Chinese README and [upgrade notes](releases/v0.3.0.md) document the published v0.3.0 downloads and supported upgrade/distribution scope. Historical local handoffs remain as evidence; pending GitHub checkboxes are superseded by this batch. Final validation and delivery are recorded below.
 
 ## v0.2.0 source batch — 2026-11-04
 
@@ -171,3 +171,10 @@ File settings handoff: 978 checks and isolated bilingual geometry acceptance pas
 ### v0.3.0 release candidate validation — 2026-11-20
 
 Tracking: [#5](https://github.com/haos666/hostharbor/issues/5), including the pending v0.2.0 work in #3/#4. Final package/MCP version is 0.3.0. Required check passed 978 tests/types/build; native Core/OS protection/synthetic SSH/SFTP/MCP passed after the version change. Existing isolated bilingual GUI acceptance covers the same implementation; no extra GUI rerun solely for documentation/version metadata. Reviewed 141 public candidate files: no runtime archives, matched credential/instance/local-user-path patterns or broken relative links. This is a scoped pattern review, not a guarantee of detecting every secret. Only public-main ancestry is included. Final arm64/x64 CI and merge links are maintained in #5; published installers remain v0.1.0 until a separate distribution release.
+
+
+### v0.3.0 GitHub delivery completed — 2026-11-20
+
+[PR #6](https://github.com/haos666/hostharbor/pull/6) merged to public main at f463cd78e18711761e1ecdb016be8a996bccb4c8; version tag v0.3.0 targets that merge. [CI run](https://github.com/haos666/hostharbor/actions/runs/44703013580) passed both macOS arm64/x64 jobs: checks, native protection/Core/synthetic SSH/SFTP/MCP, DMG/ZIP packaging, architecture verification and checksums. Downloaded all four installer files and verified them against the CI SHA-256 manifests before uploading; no expanded app copies were created. [v0.3.0 release](https://github.com/haos666/hostharbor/releases/tag/v0.3.0) provides six assets: arm64/x64 DMG, ZIP and checksum manifests. English/Chinese README download links and release notes now match the published files. Old PR #4 is closed as superseded; #3/#5 track the completed batch. Windows distribution remains deferred; binaries are unsigned/non-notarized.
+
+This final follow-up changes documentation only; runtime code and dependencies match the tested release candidate. No extra Actions runs or local application restart are required for these documentation changes.

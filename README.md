@@ -32,10 +32,10 @@ The current distribution targets **macOS only**. Choose the architecture that ma
 
 | Mac | Download |
 | --- | --- |
-| Apple Silicon — M series | [arm64 installer](https://github.com/haos666/hostharbor/releases/download/v0.1.0/HostHarbor-0.1.0-mac-arm64.dmg) |
-| Intel | [x64 installer](https://github.com/haos666/hostharbor/releases/download/v0.1.0/HostHarbor-0.1.0-mac-x64.dmg) |
+| Apple Silicon — M series | [arm64 installer](https://github.com/haos666/hostharbor/releases/download/v0.3.0/HostHarbor-0.3.0-mac-arm64.dmg) |
+| Intel | [x64 installer](https://github.com/haos666/hostharbor/releases/download/v0.3.0/HostHarbor-0.3.0-mac-x64.dmg) |
 
-ZIP archives and SHA-256 checksums are available on the [release page](https://github.com/haos666/hostharbor/releases/tag/v0.1.0). These initial binaries are **not Developer ID signed or notarized**; macOS may block opening them. Review the release notes and verify the checksum before choosing whether to open the application through macOS security settings. Do not disable Gatekeeper globally.
+ZIP archives and SHA-256 checksums are available on the [release page](https://github.com/haos666/hostharbor/releases/tag/v0.3.0). These binaries are **not Developer ID signed or notarized**; macOS may block opening them. Review the release notes and verify the checksum before choosing whether to open the application through macOS security settings. Do not disable Gatekeeper globally.
 
 Windows installers are deferred to a later release. Source code for Windows is not a promise of current Windows release support.
 
@@ -71,7 +71,9 @@ This update brings the pending backup and per-access approval work together with
 
 ![Offline inspection theme preview using synthetic data](resources/report-previews/aurora-en.jpg)
 
-The download table above identifies the published **v0.1.0** installers. **v0.3.0 source availability does not mean its installers have been published**; use the Releases page to check actual downloads. Current source uses schema15: preserve a pre-upgrade app-data copy for rollback. Existing reports without metrics remain readable and show missing measurements as unavailable. Reconnect MCP clients to refresh their tool schema. Windows distribution remains deferred.
+**v0.3.0 is available for macOS Apple Silicon and Intel**, with DMG, ZIP and per-architecture SHA-256 checksums on the [release page](https://github.com/haos666/hostharbor/releases/tag/v0.3.0). Both architectures passed [release CI](https://github.com/haos666/hostharbor/actions/runs/44703013580).
+
+Current source uses schema15: preserve a pre-upgrade app-data copy for rollback. Existing reports without metrics remain readable and show missing measurements as unavailable. Reconnect MCP clients to refresh their tool schema. Windows distribution remains deferred.
 
 ## Build and contribute
 

@@ -2,7 +2,7 @@
 
 ## 0.3.0 — Inspection workspace and server organization (2026-11-20)
 
-[Bilingual release and upgrade notes](docs/releases/v0.3.0.md). Consolidates the pending v0.2.0 source batch; downloadable installer publication is tracked separately.
+[Bilingual release and upgrade notes](docs/releases/v0.3.0.md). Consolidates the pending v0.2.0 source batch. [macOS arm64/x64 DMG, ZIP and checksums](https://github.com/haos666/hostharbor/releases/tag/v0.3.0) are published after both architectures passed release CI.
 
 - Dedicated report-first inspection workspace with editable templates, bounded AI checklist suggestions, server/tag/result/time filters and versioned report history.
 - Structured CPU/memory/disk measurements and system/application/custom report sections; offline browser dashboards with four complete themes and Markdown/Word/HTML exports.

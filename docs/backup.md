@@ -37,7 +37,7 @@
 
 ## English
 
-Available in the local development build; not included in the published v0.1.0 installers. Open **Settings → Data & integrations → Backup & restore** after unlocking the app.
+Available in v0.3.0; not included in v0.1.0 installers. Open **Settings → Data & integrations → Backup & restore** after unlocking the app.
 
 Create a `.hhbackup` file with a separate, nonempty password and matching confirmation. There are no minimum-length or character-complexity rules. The app does not remember this password; the app recovery code cannot decrypt the file.
 
