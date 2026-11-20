@@ -39,7 +39,7 @@ export class LocalMcpServer {
         if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return }
         if (this.inFlight >= 16) { response.writeHead(429).end(); return }
         this.inFlight++
-        const mcp = new McpServer({ name: 'hostharbor', version: '0.1.0' }, { instructions: mcpInstructions })
+        const mcp = new McpServer({ name: 'hostharbor', version: '0.3.0' }, { instructions: mcpInstructions })
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: 65536 })
         const invoke = async (work: () => unknown) => {
           try {
@@ -60,7 +60,7 @@ export class LocalMcpServer {
         mcp.registerTool('list_remote_files', mcpToolDefinitions.list_remote_files, input => invoke(() => this.files.browse(profileId, input)))
         mcp.registerTool('upload_file', mcpToolDefinitions.upload_file, input => invoke(() => this.files.start(profileId, { ...input, direction: 'upload' })))
         mcp.registerTool('download_file', mcpToolDefinitions.download_file, input => invoke(() => this.files.start(profileId, { ...input, direction: 'download' })))
-        mcp.registerTool('list_servers', mcpToolDefinitions.list_servers, ({ query }) => invoke(() => this.operations.listServers(profileId).filter(s => !query || [s.name, s.host].some(v => v.toLocaleLowerCase().includes(query.toLocaleLowerCase())))))
+        mcp.registerTool('list_servers', mcpToolDefinitions.list_servers, ({ query }) => invoke(() => this.operations.listServers(profileId).filter(s => !query || [s.name, s.host, ...s.tags.map(t=>t.name)].some(v => v.toLocaleLowerCase().includes(query.toLocaleLowerCase())))))
         if (this.applications) {
           const applications = this.applications
           mcp.registerTool('get_server_context', mcpToolDefinitions.get_server_context, ({ serverId }) => invoke(() => applications.serverContext(profileId, serverId)))

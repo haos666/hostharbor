@@ -1,11 +1,11 @@
 import { createHash, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto'
 import { utils, type Client, type ConnectConfig } from 'ssh2'
-import type { ConnectionTest, CredentialInput, CredentialSummary, ServerRecord } from '../../shared/contracts'
+import type { ConnectionTest, CredentialInput, CredentialSummary, SocksProxy, ServerRecord } from '../../shared/contracts'
 import { AppError, type ErrorCode } from '../../shared/errors'
 import { authenticate, ConnectionScope, forward, socks5 } from '../ssh/connection'
 import { Store } from '../storage/database'
 import { open, seal } from '../credentials/crypto'
-import { credentialSchema, idSchema, parse, serverSchema } from '../validation'
+import { credentialSchema, idSchema, parse, serverSchema, proxySchema, proxyCatalogSchema } from '../validation'
 
 class HostChallenge extends Error { constructor(readonly result: Extract<ConnectionTest, { status: 'host-key-required' }>) { super('Host verification required') } }
 const CHECK = 'HostHarbor vault check v1'
@@ -65,12 +65,78 @@ export class ServerService {
   listCredentials(): CredentialSummary[] { this.unlocked(); return this.store.listCredentials() }
   listServers(): ServerRecord[] { this.unlocked(); return this.store.listServers() }
 
+  // Encrypted catalog; routes carry canonical snapshots for immutable approval details.
+  listProxies(): SocksProxy[] {
+    this.unlocked()
+    const row = this.store.db.prepare('SELECT value FROM metadata WHERE key=?').get('socks-proxies:v1')
+    if (!row) return []
+    const plain = this.reveal('socks-proxies:v1', row.value as Uint8Array)
+    try { return proxyCatalogSchema.parse(JSON.parse(plain.toString())) }
+    catch { throw new AppError('STORAGE_FAILED') } finally { plain.fill(0) }
+  }
+  private writeProxies(proxies: SocksProxy[]): void {
+    const plain = Buffer.from(JSON.stringify(parse(proxyCatalogSchema, proxies)))
+    try { this.store.db.prepare('INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('socks-proxies:v1', this.protect('socks-proxies:v1', plain)) }
+    finally { plain.fill(0) }
+  }
+  saveProxy(raw: unknown): SocksProxy {
+    this.unlocked()
+    const input = parse(proxySchema, raw), catalog = this.listProxies()
+    const old = catalog.find(p => p.id === input.id)
+    if (input.id && (!old || old.revision !== input.revision)) throw new AppError('PROXY_CHANGED')
+    if (catalog.some(p => p.id !== input.id && p.name.toLocaleLowerCase('en-US') === input.name.toLocaleLowerCase('en-US'))) throw new AppError('PROXY_DUPLICATE')
+    const auth = input.route.authentication
+    if (auth.type === 'password' && this.store.getCredential(auth.credentialId)?.kind !== 'password') throw new AppError('PROXY_CREDENTIAL')
+    const saved: SocksProxy = {...input, id: input.id ?? randomUUID(), revision: (old?.revision ?? 0) + 1}
+    const next = old ? catalog.map(p => p.id === old.id ? saved : p) : [...catalog, saved]
+    parse(proxyCatalogSchema, next)
+    this.changed()
+    this.store.db.exec('SAVEPOINT proxy_change')
+    try {
+      this.writeProxies(next)
+      for (const server of this.store.listServers()) if (server.route.type === 'socks5' && server.route.proxyId === saved.id) {
+        this.store.db.prepare('UPDATE servers SET route=?,revision=revision+1 WHERE id=?').run(JSON.stringify({...saved.route,proxyId:saved.id}),server.id)
+      }
+      this.store.db.exec('RELEASE proxy_change')
+    } catch(error) { this.store.db.exec('ROLLBACK TO proxy_change'); this.store.db.exec('RELEASE proxy_change'); throw error }
+    return saved
+  }
+  deleteProxy(raw: unknown): void {
+    this.unlocked()
+    const input = parse(proxySchema.pick({id:true,revision:true}).required(),raw), catalog = this.listProxies()
+    if (!catalog.some(p => p.id === input.id && p.revision === input.revision)) throw new AppError('PROXY_CHANGED')
+    if (this.store.listServers().some(s => s.route.type === 'socks5' && s.route.proxyId === input.id)) throw new AppError('PROXY_IN_USE')
+    this.changed(); this.writeProxies(catalog.filter(p => p.id !== input.id))
+  }
+  // Called explicitly by the desktop, never by MCP. Deduplicate legacy inline routes.
+  migrateProxies(): SocksProxy[] {
+    this.unlocked()
+    const legacy = this.store.listServers().filter(s => s.route.type === 'socks5' && !s.route.proxyId)
+    if (!legacy.length) return this.listProxies()
+    this.changed()
+    this.store.db.exec('SAVEPOINT proxy_migration')
+    try {
+      for (const server of legacy) {
+        const route = server.route as Extract<ServerRecord['route'], {type:'socks5'}>
+        const catalog = this.listProxies()
+        const match = catalog.find(p => JSON.stringify(p.route) === JSON.stringify(route))
+        let name = `SOCKS5 ${catalog.length + 1}`
+        while (catalog.some(p => p.name === name)) name += ' +'
+        const proxy = match ?? this.saveProxy({name,route})
+        this.store.db.prepare('UPDATE servers SET route=?,revision=revision+1 WHERE id=?').run(JSON.stringify({...proxy.route,proxyId:proxy.id}),server.id)
+      }
+      this.store.db.exec('RELEASE proxy_migration')
+    } catch(error) { this.store.db.exec('ROLLBACK TO proxy_migration'); this.store.db.exec('RELEASE proxy_migration'); throw error }
+    return this.listProxies()
+  }
+
   saveCredential(raw: unknown): CredentialSummary {
     const key = this.unlocked()
     const input = parse(credentialSchema, raw)
     if (input.id && !this.store.getCredential(input.id)) throw new AppError('NOT_FOUND')
     if (input.id && input.kind !== 'password' && this.store.listServers().some(s => s.elevation?.type === 'sudo' && ((s.elevation.passwordSource === 'login' && s.credentialId === input.id) || (s.elevation.passwordSource === 'credential' && s.elevation.credentialId === input.id)))) throw new AppError('SUDO_CREDENTIAL')
     if (input.id && input.kind !== 'password' && this.store.listServers().some((server) => server.route.type === 'socks5' && server.route.authentication.type === 'password' && server.route.authentication.credentialId === input.id)) throw new AppError('PROXY_CREDENTIAL')
+    if (input.id && input.kind !== 'password' && this.listProxies().some(p => p.route.authentication.type === 'password' && p.route.authentication.credentialId === input.id)) throw new AppError('PROXY_CREDENTIAL')
     if (input.kind === 'private-key') {
       const parsed = utils.parseKey(input.privateKey, input.passphrase)
       if (parsed instanceof Error || Array.isArray(parsed) || !parsed.isPrivateKey()) throw new AppError('INVALID_PRIVATE_KEY')
@@ -91,6 +157,7 @@ export class ServerService {
     if (!this.store.getCredential(id)) throw new AppError('NOT_FOUND')
     if (this.store.listServers().some(s => s.elevation?.type === 'sudo' && s.elevation.credentialId === id)) throw new AppError('CREDENTIAL_IN_USE')
     if (this.store.listServers().some((server) => server.credentialId === id || (server.route.type === 'socks5' && server.route.authentication.type === 'password' && server.route.authentication.credentialId === id))) throw new AppError('CREDENTIAL_IN_USE')
+    if (this.listProxies().some(p => p.route.authentication.type === 'password' && p.route.authentication.credentialId === id)) throw new AppError('CREDENTIAL_IN_USE')
     this.changed()
     this.store.db.prepare('DELETE FROM credentials WHERE id=?').run(id)
   }
@@ -105,7 +172,12 @@ export class ServerService {
       const id = elevation.passwordSource === 'login' ? input.credentialId : elevation.credentialId
       if (!id || this.store.getCredential(id)?.kind !== 'password') throw new AppError('SUDO_CREDENTIAL')
     }
-    const route = input.route
+    let route = input.route
+    if (route.type === 'socks5' && route.proxyId) {
+      const proxy = this.listProxies().find(p => p.id === (route as Extract<ServerRecord['route'],{type:'socks5'}>).proxyId)
+      if (!proxy) throw new AppError('PROXY_CHANGED')
+      route = {...proxy.route,proxyId:proxy.id}
+    }
     if (route.type === 'ssh-jump') {
       const jump = this.store.getServer(route.serverId)
       if (!jump || jump.id === id || jump.route.type !== 'direct' || !jump.credentialId) throw new AppError('ROUTE_INVALID')
@@ -123,7 +195,12 @@ export class ServerService {
     if (!this.store.getServer(id)) throw new AppError('NOT_FOUND')
     if (this.store.listServers().some((server) => server.route.type === 'ssh-jump' && server.route.serverId === id)) throw new AppError('SERVER_IN_USE')
     this.changed()
-    this.store.db.prepare('DELETE FROM servers WHERE id=?').run(id)
+    this.store.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.store.db.prepare("DELETE FROM metadata WHERE key IN (SELECT 'inspection-review:' || id FROM inspection_reports WHERE serverId=?)").run(id)
+      this.store.db.prepare('DELETE FROM servers WHERE id=?').run(id)
+      this.store.db.exec('COMMIT')
+    } catch(error) { this.store.db.exec('ROLLBACK'); throw error }
   }
   trustHost(raw: unknown): void {
     this.unlocked()

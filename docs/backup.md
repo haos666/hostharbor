@@ -41,7 +41,7 @@ Available in the local development build; not included in the published v0.1.0 i
 
 Create a `.hhbackup` file with a separate, nonempty password and matching confirmation. There are no minimum-length or character-complexity rules. The app does not remember this password; the app recovery code cannot decrypt the file.
 
-The encrypted payload contains passwords, private keys/passphrases, servers and login/sudo/proxy/jump bindings, pinned host identities, completed dossiers and manual corrections, application/log context, file settings and current inspection plans (not report history). It excludes MCP profiles/tokens/grants, activity history/replay, raw investigation output, transferred files, app security proofs, AI keys and global preferences. Asset names and addresses are encrypted too.
+The encrypted payload contains passwords, private keys/passphrases, servers and login/sudo/proxy/jump bindings, pinned host identities, completed dossiers and manual corrections, application/log context, file settings, shared proxy definitions, server tags/quick-filter preferences and current inspection plans (not report history). It excludes MCP profiles/tokens/grants, activity history/replay, raw investigation output, transferred files, app security proofs, AI keys and global preferences. Asset names and addresses are encrypted too.
 
 On the destination computer, configure its own app password/recovery code, unlock, choose the backup and enter its backup password. Review and select assets before importing. Exact duplicates are skipped; conflicting names may be selected as separate records. Different existing host pins block import. Selecting a server selects its required credentials/jump host. Existing records are retained.
 

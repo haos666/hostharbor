@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { msg, type MessageKey } from '../../../shared/i18n'
-export type SettingsPage = 'backup' | 'security' | 'approval' | 'recordings' | 'ai' | 'notifications' | 'language'
+export type SettingsPage = 'backup' | 'security' | 'approval' | 'recordings' | 'ai' | 'notifications' | 'language' | 'reportStyle'
 const groups: { label: MessageKey; pages: { id: SettingsPage; label: MessageKey }[] }[] = [
-  { label: 'settings.general', pages: [{ id: 'language', label: 'language.title' }, { id: 'notifications', label: 'notificationSettings.notifications' }] },
+  { label: 'settings.general', pages: [{ id: 'language', label: 'language.title' }, { id: 'notifications', label: 'notificationSettings.notifications' }, { id:'reportStyle',label:'reportStyle.title' }] },
   { label: 'settings.security', pages: [{ id: 'security', label: 'settings.vaultSecurity' }, { id: 'approval', label: 'approvalSettings.approvalPolicy' }] },
   { label: 'settings.dataAndIntegrations', pages: [{ id: 'backup', label: 'backup.title' }, { id: 'recordings', label: 'recordingSettings.logsAndStorage' }, { id: 'ai', label: 'aiSettings.aiSettings' }] },
 ]

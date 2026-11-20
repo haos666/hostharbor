@@ -1,3 +1,6 @@
+import { Toast } from './Toast'
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { ApprovalSettings } from './ApprovalSettings'
 import { msg, getLocale, errorText } from '../../../shared/i18n'
 import { ProfileList } from './ProfileList'
@@ -119,14 +122,17 @@ export function AgentWorkspace({ notificationTarget, onNotificationHandled, kind
   }
   useEffect(() => { if (!installationCopied) return; const timer = window.setTimeout(() => setInstallationCopied(null), 3000); return () => clearTimeout(timer) }, [installationCopied])
   const operation = selectedOperation?.id === selected ? selectedOperation : null
-  return <section className={`agent-workspace ${kind === 'connections' ? 'connections-workspace' : ''}${kind === 'operations' && unlocked ? ' history-workspace' : ''}`}>
-    <header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('agentWorkspace.localMcp')}</span><h1>{kind === 'connections' ? msg('agentWorkspace.agentAccess') : msg('agentWorkspace.approvals')}</h1></div>{unlocked && kind === 'connections' && connectionTab === 'access' && <button className="credential-primary" onClick={() => { setError(null); setCreating(true) }}><Plus size={16} />{msg('agentWorkspace.createAccess')}</button>}</header>
-    {kind === 'connections' && <div className="mcp-tabs" role="tablist" aria-label={msg('agentWorkspace.agentAccessCategories')} ref={tabsRef} onKeyDown={event => {
+  const navigation = kind === 'connections' && <div className="mcp-tabs" role="tablist" aria-label={msg('agentWorkspace.agentAccessCategories')} ref={tabsRef} onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
       event.preventDefault(); const next = event.key === 'Home' ? 'access' : event.key === 'End' ? 'tools' : connectionTab === 'access' ? 'tools' : 'access'
       setConnectionTab(next); tabsRef.current?.querySelector<HTMLButtonElement>(`#mcp-${next}-tab`)?.focus()
-    }}><button role="tab" id="mcp-access-tab" aria-controls="mcp-access-panel" aria-selected={connectionTab === 'access'} tabIndex={connectionTab === 'access' ? 0 : -1} onClick={() => setConnectionTab('access')}>{msg('agentWorkspace.accessManagement')}</button><button role="tab" id="mcp-tools-tab" aria-controls="mcp-tools-panel" aria-selected={connectionTab === 'tools'} tabIndex={connectionTab === 'tools' ? 0 : -1} onClick={() => setConnectionTab('tools')}>{msg('agentWorkspace.toolCatalog')}</button></div>}
-    {error && <div className="credential-notice is-error" role="alert"><span>{error}</span><button aria-label={msg('agentWorkspace.dismissMessage')} onClick={() => setError(null)}><X size={16} /></button></div>}
+    }}><button role="tab" id="mcp-access-tab" aria-controls="mcp-access-panel" aria-selected={connectionTab === 'access'} tabIndex={connectionTab === 'access' ? 0 : -1} onClick={() => setConnectionTab('access')}>{msg('agentWorkspace.accessManagement')}</button><button role="tab" id="mcp-tools-tab" aria-controls="mcp-tools-panel" aria-selected={connectionTab === 'tools'} tabIndex={connectionTab === 'tools' ? 0 : -1} onClick={() => setConnectionTab('tools')}>{msg('agentWorkspace.toolCatalog')}</button></div>
+  if (!unlocked && (kind !== 'connections' || connectionTab === 'access')) return <LockedPage label={msg('agentWorkspace.localMcp')} title={kind === 'connections' ? msg('agentWorkspace.agentAccess') : msg('agentWorkspace.approvals')} status={status} onRefresh={onRefresh} onSetup={onSetup} navigation={navigation} panel={kind==='connections'?{id:'mcp-access-panel',labelledBy:'mcp-access-tab'}:undefined}/>
+  return <section className={`agent-workspace ${kind === 'connections' ? 'connections-workspace' : ''}${kind === 'operations' && unlocked ? ' history-workspace' : ''}`}>
+    <PageHeader label={msg('agentWorkspace.localMcp')} title={kind === 'connections' ? msg('agentWorkspace.agentAccess') : msg('agentWorkspace.approvals')} actions={unlocked && kind === 'connections' && connectionTab === 'access' && <button className="credential-primary" onClick={() => { setError(null); setCreating(true) }}><Plus size={16} />{msg('agentWorkspace.createAccess')}</button>}/>
+    {navigation}
+
+    {error&&!creating&&!editing&&!tokenSetup&&!token&&!deletingProfile&&!revoke&&!selected&&<Toast message={error} error onDismiss={()=>setError(null)}/>}
     {kind === 'connections' && connectionTab === 'tools' ? <McpToolBrowser /> : !unlocked ? <div role="tabpanel" id="mcp-access-panel" aria-labelledby="mcp-access-tab"><UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup} /></div> : kind === 'connections' ? <div className="access-panel" role="tabpanel" id="mcp-access-panel" aria-labelledby="mcp-access-tab">
       <div className="mcp-service"><div><div className="mcp-service-heading"><span className={`mcp-dot ${mcp.running ? 'on' : ''}`} /><strong>{mcp.running ? msg('agentWorkspace.localServiceIsRunning') : msg('agentWorkspace.localServiceIsStopped')}</strong></div><p>{mcp.url ?? 'http://127.0.0.1:43821/mcp'}</p></div><button className={mcp.running ? 'credential-secondary' : 'credential-primary'} disabled={busy} onClick={() => void run(async () => { if (mcp.running) unwrap(await api.stopMcp()); else unwrap(await api.startMcp()) })}>{mcp.running ? msg('agentWorkspace.stopService') : msg('agentWorkspace.startService')}</button></div>
       <p className="agent-hint">{msg('agentWorkspace.copyTheInstallationConfigurationToYourLocalAgent')}</p>
@@ -164,6 +170,12 @@ export function AgentWorkspace({ notificationTarget, onNotificationHandled, kind
 }
 function ProfileEditor({ profile, servers, busy, error, onClose, onCreate, onPolicy }: { onPolicy?:()=>void; profile?: AccessProfile; servers: ServerRecord[]; busy: boolean; error: string | null; onClose: () => void; onCreate: (input: ProfileInput) => void }) {
   const [ids, setIds] = useState<string[]>(profile?.serverIds ?? [])
+  const [serverSearch, setServerSearch] = useState('')
+  const candidates = servers.filter(s => s.credentialId || ids.includes(s.id))
+  const results = candidates.filter(s => [s.name,s.host,s.username].some(value => value.toLocaleLowerCase().includes(serverSearch.trim().toLocaleLowerCase())))
+  const selectable = results.filter(s => s.credentialId).map(s => s.id)
+  const allSelected = selectable.length > 0 && selectable.every(id => ids.includes(id))
+
   const [discard, setDiscard] = useState(false), dirty = useRef(false)
   function dismiss() { if (busy) return; if (dirty.current) setDiscard(true); else onClose() }
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -174,7 +186,10 @@ function ProfileEditor({ profile, servers, busy, error, onClose, onCreate, onPol
     <div className="profile-scroll"><fieldset className="profile-fields" disabled={busy}>
     <h2 id="profile-title">{profile ? msg('agentWorkspace.editAgentAccess') : msg('agentWorkspace.createAgentAccess')}</h2>
     <label>{msg('agentWorkspace.name')}<input data-initial-focus name="name" required maxLength={100} defaultValue={profile?.name} placeholder={msg('agentWorkspace.accessName')} /></label>
-    <fieldset><legend>{msg('agentWorkspace.accessibleServersSelected')} {ids.length} {msg('agentWorkspace.servers')}</legend>{servers.filter(s => s.credentialId).length === 0 && <p>{msg('agentWorkspace.addAServerAndBindCredentialsFirst')}</p>}{servers.filter(s => s.credentialId || ids.includes(s.id)).map(s => <label className="agent-check" key={s.id}><input type="checkbox" checked={ids.includes(s.id)} onChange={e => setIds(old => e.target.checked ? [...old, s.id] : old.filter(id => id !== s.id))} />{s.name}<small>{s.credentialId ? s.host : msg('agentWorkspace.credentialsMustBeRebound')}</small></label>)}{ids.filter(id => !servers.some(s => s.id === id)).map(id => <label className="agent-check" key={id}><input type="checkbox" checked onChange={() => setIds(old => old.filter(value => value !== id))} />{msg('agentWorkspace.deletedServer')}<small>{msg('agentWorkspace.removeThisAuthorization')}</small></label>)}</fieldset>
+    <fieldset className="profile-server-picker"><legend>{msg('agentWorkspace.accessibleServersSelected')} {ids.length} {msg('agentWorkspace.servers')}</legend>
+      <div className="profile-server-tools"><input type="search" aria-label={msg('serversPage.searchServers')} placeholder={msg('serversPage.searchNameAddressOrAccount')} value={serverSearch} onChange={e=>{e.stopPropagation();setServerSearch(e.target.value)}}/><button type="button" className="credential-secondary" disabled={!selectable.length} onClick={()=>{dirty.current=true;setIds(old=>allSelected?old.filter(id=>!selectable.includes(id)):[...new Set([...old,...selectable])])}}>{msg(allSelected?'agentWorkspace.clearVisible':'agentWorkspace.selectVisible')}</button></div>
+      <div className="profile-server-results">{!candidates.length&&<p>{msg('agentWorkspace.addAServerAndBindCredentialsFirst')}</p>}{!!candidates.length&&!results.length&&<p>{msg('agentWorkspace.noServersFound')}</p>}{results.map(s=><label className="agent-check" key={s.id}><input type="checkbox" checked={ids.includes(s.id)} onChange={e=>setIds(old=>e.target.checked?[...old,s.id]:old.filter(id=>id!==s.id))}/><span>{s.name}</span><small>{s.credentialId?s.host:msg('agentWorkspace.credentialsMustBeRebound')}</small></label>)}{ids.filter(id=>!servers.some(s=>s.id===id)).map(id=><label className="agent-check" key={id}><input type="checkbox" checked onChange={()=>setIds(old=>old.filter(value=>value!==id))}/>{msg('agentWorkspace.deletedServer')}<small>{msg('agentWorkspace.removeThisAuthorization')}</small></label>)}</div>
+    </fieldset>
     <p className="agent-hint">{msg('agentWorkspace.executionFollowsTheApprovalPolicyInSettingsUploads')}</p>{profile&&onPolicy&&<button type="button" className="credential-secondary" onClick={onPolicy}>{msg('channel.policy')}</button>}
     <label>{msg('agentWorkspace.validity')}<select name="duration" defaultValue={profile ? 'keep' : '10080'}>{profile && <option value="keep">{profile.expiresAt === null ? msg('agentWorkspace.keepPermanentAccess') : msg('agentWorkspace.keepCurrentExpiryValue', { value0: new Date(profile.expiresAt).toLocaleString(getLocale()) })}</option>}<option value="10080">{msg('agentWorkspace.7Days')}</option><option value="43200">{msg('agentWorkspace.30Days')}</option><option value="permanent">{msg('agentWorkspace.permanent')}</option></select></label>
     {profile && <p className="agent-hint">{msg('agentWorkspace.savingStopsUnfinishedTasksAndDisconnectsThisAccess')}</p>}

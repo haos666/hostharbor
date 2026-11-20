@@ -1,3 +1,5 @@
+import { ServerTagsService } from '../src/core/servers/tags'
+import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { randomBytes, createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, symlinkSync } from 'node:fs'
@@ -31,6 +33,49 @@ const selection=(p:BackupPreview)=>({sessionId:p.sessionId,credentials:p.items.f
 async function exported(){const source=fixture(),assets=seed(source);await source.backup.export(source.file,'1',source.guard);return {source,...assets}}
 
 describe('portable encrypted assets',()=>{
+ it('backs up tags, remaps only restored server assignments and merges same-name colors without overwriting',async()=>{
+  const source=fixture(),assets=seed(source),tag={id:randomUUID(),name:'Synthetic shared',color:'#6ba9ef'},tags=new ServerTagsService(source.servers)
+  tags.save({revision:0,tags:[tag],assignments:{[assets.server.id]:[tag.id],[assets.jump.id]:[tag.id]}})
+  await source.backup.export(source.file,'1',source.guard)
+  const target=fixture(),existing=target.servers.saveServer({name:'existing-synthetic',host:'existing.invalid',port:22,username:'fixture-user',credentialId:null}),local=new ServerTagsService(target.servers),own={...tag,id:randomUUID(),color:'#80cbb4'}
+  local.save({revision:0,tags:[own],assignments:{[existing.id]:[own.id]}})
+  const preview=await target.backup.preview(source.file,'1',target.guard)
+  await target.backup.commit(selection(preview),target.guard)
+  const state=local.get(),restored=target.servers.listServers().find(s=>s.name===assets.server.name)!
+  expect(state.tags).toEqual([own]);expect(state.assignments[restored.id]).toEqual([own.id]);expect(state.assignments[existing.id]).toEqual([own.id]);expect(state.assignments[assets.server.id]).toBeUndefined()
+  const again=await target.backup.preview(source.file,'1',target.guard)
+  // Preview is bound to tag metadata as well as assets.
+  local.save({...state,tags:[{...own,name:'Changed synthetic'}]})
+  await expect(target.backup.commit({sessionId:again.sessionId,servers:[assets.server.id],credentials:[]},target.guard)).rejects.toMatchObject({code:'BACKUP_CHANGED'})
+ })
+
+ it('round-trips quick tag tabs and retains local capacity during backup restore',async()=>{
+  const source=fixture(),assets=seed(source),tags=Array.from({length:4},(_,i)=>({id:randomUUID(),name:`Synthetic portable tab ${i}`,color:'#6ba9ef',pinned:true}))
+  new ServerTagsService(source.servers).save({revision:0,tags,assignments:{[assets.server.id]:[tags[0].id]}})
+  await source.backup.export(source.file,'p',source.guard)
+  const target=fixture(),localTags=new ServerTagsService(target.servers)
+  const existing={id:randomUUID(),name:'Synthetic local tab',color:'#80cbb4',pinned:true}
+  localTags.save({revision:0,tags:[existing],assignments:{}})
+  const preview=await target.backup.preview(source.file,'p',target.guard);await target.backup.commit(selection(preview),target.guard)
+  const result=localTags.get();expect(result.tags.filter(t=>t.pinned)).toHaveLength(4);expect(result.tags.find(t=>t.id===existing.id)).toEqual(existing)
+  expect(result.tags.filter(t=>t.name.startsWith('Synthetic portable tab'))).toHaveLength(4)
+ })
+
+ it('restores shared proxies once, remaps credentials and references, deduplicates repeated imports and guards preview changes',async()=>{
+  const source=fixture(),target=fixture(),{credential}=seed(source)
+  const proxy=source.servers.saveProxy({name:'Synthetic shared proxy',route:{type:'socks5',host:'synthetic-proxy.invalid',port:1080,authentication:{type:'password',username:'synthetic',credentialId:credential.id}}})
+  for(const name of ['synthetic-first','synthetic-second'])source.servers.saveServer({name,host:name+'.invalid',port:22,username:'synthetic',credentialId:credential.id,route:{...proxy.route,proxyId:proxy.id}})
+  await source.backup.export(source.file,'p',source.guard)
+  const preview=await target.backup.preview(source.file,'p',target.guard)
+  await target.backup.commit(selection(preview),target.guard)
+  const proxies=target.servers.listProxies();expect(proxies).toHaveLength(1);expect(proxies[0].id).not.toBe(proxy.id)
+  const routes=target.servers.listServers().filter(s=>s.route.type==='socks5').map(s=>s.route)
+  expect(routes).toHaveLength(2);for(const route of routes)expect(route).toMatchObject({proxyId:proxies[0].id})
+  const repeat=await target.backup.preview(source.file,'p',target.guard);expect(repeat.items.every(i=>i.status==='duplicate')).toBe(true)
+  target.servers.saveProxy({...proxies[0],name:'Renamed synthetic'})
+  await expect(target.backup.commit({sessionId:repeat.sessionId,servers:[],credentials:[credential.id]},target.guard)).rejects.toMatchObject({code:'BACKUP_CHANGED'})
+ })
+
  it('supports a one-character password, independent random envelopes and authenticated failure',async()=>{
   const plain=Buffer.from('synthetic-backup-content'),a=await encryptBackup(plain,'1'),b=await encryptBackup(plain,'1')
   expect(a.equals(b)).toBe(false);expect(a.includes(plain)).toBe(false);expect((await decryptBackup(a,'1')).equals(plain)).toBe(true)

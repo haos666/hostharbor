@@ -1,3 +1,5 @@
+import { Toast } from './Toast'
+import { PageHeader } from './PageHeader'
 import { msg, errorText } from '../../../shared/i18n'
 import { useEffect, useState, type FormEvent } from 'react'
 import { KeyRound, LockKeyhole, RefreshCw, ShieldCheck, X } from 'lucide-react'
@@ -15,8 +17,8 @@ export function SecuritySettings({ status, onRefresh }: { status: AppStatus | nu
   useEffect(() => { setMode(null) }, [status?.lockRevision])
   const configured = status?.security === 'password'
   return <section className="security-page">
-    <header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('securitySettings.security')}</h1></div></header>
-    {message && <div className="credential-notice" role="status"><ShieldCheck size={16} /><span>{message}</span><button aria-label={msg('agentWorkspace.dismissMessage')} onClick={() => setMessage('')}><X size={15} /></button></div>}
+    <PageHeader label={msg('aiSettings.settings')} title={msg('securitySettings.security')}/>
+    {message&&<Toast message={message} onDismiss={()=>setMessage('')}/>}
     <div className="security-card">
       <div className="security-setting"><span className="security-setting-icon"><LockKeyhole size={21} /></span><div><h2>{msg('securitySettings.lockPassword')}</h2><p>{configured ? msg('securitySettings.verifyYourPasswordWheneverUnlockingTheVault') : status?.security === 'legacy' ? msg('securitySettings.setAPasswordForTheExistingVaultTo') : msg('securitySettings.setAPasswordAndRecoveryCodeToCreate')}</p></div><button className="quiet-button" disabled={!status} onClick={() => setMode(configured ? 'password' : 'setup')}>{configured ? msg('securitySettings.changePassword') : msg('securitySettings.setPassword')}</button></div>
       {configured && <div className="security-setting"><span className="security-setting-icon"><KeyRound size={21} /></span><div><h2>{msg('securitySettings.recoveryCode')}</h2><p>{msg('securitySettings.resetAForgottenPasswordKeepTheCodeIn')}</p></div><button className="quiet-button" onClick={() => setMode('recovery')}>{msg('securitySettings.changeRecoveryCode')}</button></div>}
@@ -29,11 +31,11 @@ export function SecuritySettings({ status, onRefresh }: { status: AppStatus | nu
   </section>
 }
 
-export function UnlockGate({ status, onRefresh, onSetup }: { status: AppStatus | null; onRefresh: () => Promise<void>; onSetup: () => void }) {
+export function UnlockGate({ status, onRefresh, onSetup, panel }: { status: AppStatus | null; onRefresh: () => Promise<void>; onSetup: () => void; panel?:{id:string;labelledBy:string} }) {
   const [mode, setMode] = useState<'unlock' | 'reset' | null>(null)
   useEffect(() => { setMode(null) }, [status?.lockRevision])
   const needsSetup = status?.security !== 'password'
-  return <div className="vault-gate">
+  return <div className="vault-gate" role={panel?'tabpanel':undefined} id={panel?.id} aria-labelledby={panel?.labelledBy}>
     <div className="vault-symbol"><LockKeyhole size={28} strokeWidth={1.5} /></div>
     <h2>{!status ? msg('securitySettings.connecting') : needsSetup ? msg('securitySettings.setVaultPassword') : status?.backgroundMcp ? msg('securitySettings.desktopLocked') : msg('securitySettings.vaultLocked')}</h2>
     <p>{needsSetup ? msg('securitySettings.setALockPasswordAndRecoveryCodeBefore') : msg('securitySettings.enterTheLockPasswordToViewAndManage')}</p>
@@ -57,7 +59,7 @@ function UnlockForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
     } catch { setError(msg('securitySettings.unlockIncompleteRetry')) }
     finally { setBusy(false) }
   }
-  return <Dialog className="credential-confirm security-dialog" labelledBy="unlock-title" onDismiss={() => { if (!busy) onClose() }}><div className="unlock-heading"><span><LockKeyhole size={18} /></span><h2 id="unlock-title">{msg('securitySettings.unlockVault')}</h2></div><form onSubmit={(event) => void submit(event)}><label className="drawer-field">{msg('securitySettings.lockPassword')}<input name="password" type="password" placeholder={msg('securitySettings.enterLockPassword')} required autoComplete="current-password" autoFocus data-initial-focus disabled={busy} /></label>{error && <div className="drawer-error" role="alert">{error}</div>}<div className="confirm-actions"><button type="button" className="quiet-button" disabled={busy} onClick={onClose}>{msg('agentWorkspace.cancel')}</button><button className="credential-primary" disabled={busy}>{busy ? msg('securitySettings.unlocking') : msg('securitySettings.unlock')}</button></div></form></Dialog>
+  return <Dialog className="credential-confirm security-dialog unlock-dialog" labelledBy="unlock-title" onDismiss={() => { if (!busy) onClose() }}><div className="unlock-heading"><span><LockKeyhole size={18} /></span><h2 id="unlock-title">{msg('securitySettings.unlockVault')}</h2></div><form onSubmit={(event) => void submit(event)}><div className="drawer-field"><input aria-label={msg('securitySettings.lockPassword')} name="password" type="password" placeholder={msg('securitySettings.enterLockPassword')} required autoComplete="current-password" autoFocus data-initial-focus disabled={busy} /></div>{error && <div className="drawer-error" role="alert">{error}</div>}<div className="confirm-actions"><button type="button" className="quiet-button" disabled={busy} onClick={onClose}>{msg('agentWorkspace.cancel')}</button><button className="credential-primary" disabled={busy}>{busy ? msg('securitySettings.unlocking') : msg('securitySettings.unlock')}</button></div></form></Dialog>
 }
 
 function SecurityForm({ mode, onClose, onSaved }: { mode: Mode; onClose: () => void; onSaved: () => Promise<void> }) {

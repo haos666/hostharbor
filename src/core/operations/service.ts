@@ -1,3 +1,4 @@
+import { ServerTagsService } from '../servers/tags'
 import { TransferDeadline } from '../files/deadlines'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { RecordingStore } from '../recording/storage'
@@ -252,7 +253,8 @@ export class OperationService {
   }
   listServers(profileId: string) {
     const profile = this.profile(profileId)
-    return this.servers.listServers().filter((s) => profile.serverIds.includes(s.id)).map(({ id, name, host, port, username, elevation }) => ({ id, name, host, port, username, sudoConfigured: elevation?.type === 'sudo' }))
+    const labels=new ServerTagsService(this.servers).get()
+    return this.servers.listServers().filter((s) => profile.serverIds.includes(s.id)).map(({ id, name, host, port, username, elevation }) => ({ id, name, host, port, username, tags:labels.tags.filter(t=>labels.assignments[id]?.includes(t.id)).map(({name,color})=>({name,color})), sudoConfigured: elevation?.type === 'sudo' }))
   }
   snapshot(serverId: string): { snapshot: string; routeServers: ServerRecord[]; target: ServerRecord; dependencies: Detail['dependencies'] } {
     const server = this.servers.store.getServer(serverId)

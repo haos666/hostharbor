@@ -1,3 +1,6 @@
+import { reportHtml } from '../src/main/inspection-report-format'
+import { ServerTagsService } from '../src/core/servers/tags'
+import { randomUUID } from 'node:crypto'
 import { inspectionTemplate, inspectionPlanningPrompt, inspectionSteps } from '../src/shared/inspection-template'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { randomBytes } from 'node:crypto'
@@ -24,7 +27,7 @@ const cleanup:(()=>Promise<unknown>|unknown)[]=[]
 afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close()})
 async function fixture(fetcher?:typeof fetch){
  const dir=mkdtempSync(join(tmpdir(),'hostharbor-inspection-'));cleanup.push(()=>rmSync(dir,{recursive:true,force:true}))
- const remote=await sshFixture({exec:(command,stream)=>{const marker=command.match(/[a-f0-9]{48}/)![0];stream.write(`${marker}\0/fixture\0synthetic health result\n`);setTimeout(()=>{stream.exit(command.includes('synthetic failure')?5:0);stream.end()},5)}});cleanup.push(()=>remote.close())
+ const remote=await sshFixture({exec:(command,stream)=>{const marker=command.match(/[a-f0-9]{48}/)![0];stream.write(`${marker}\0/fixture\0${command.includes('synthetic dashboard samples')?JSON.stringify({cpu:21.5,memoryUsed:4096,memoryTotal:16384,diskUsed:8192,diskTotal:32768}):'synthetic health result'}\n`);setTimeout(()=>{stream.exit(command.includes('synthetic failure')?5:0);stream.end()},5)}});cleanup.push(()=>remote.close())
  const servers=new ServerService(new Store(join(dir,'assets.sqlite'))),key=randomBytes(32);servers.unlock(key)
  const credential=servers.saveCredential({kind:'password',name:'Synthetic inspection login',password:'target-secret'})
  const server=servers.saveServer({name:'Synthetic inspection server',host:'127.0.0.1',port:remote.port,username:'target-user',credentialId:credential.id})
@@ -37,6 +40,92 @@ async function fixture(fetcher?:typeof fetch){
  return {dir,key,remote,servers,server,credential,operations,ai,investigations,applications,inspections,profile,save,input}
 }
 describe('server inspection workflow',()=>{
+ async function reviewFixture(statuses:('abnormal'|'incomplete'|'normal')[],fetcher?:typeof fetch){
+  const f=await fixture(fetcher),plan=f.save(statuses.map((_,i)=>`## Synthetic check ${i+1}\nCheck synthetic service state.`).join('\n\n')),op=f.operations.start(f.profile.profile.id,{serverId:f.server.id,requestKey:'review-evidence',command:'synthetic health query',cwd:'/'})
+  f.operations.decide({id:op.id,approve:true});await vi.waitFor(()=>expect(f.operations.get(op.id).state).toBe('succeeded'))
+  const input={...f.input(plan),finishedAt:Date.now(),summary:'Synthetic original findings',items:plan.checks.map((c,n)=>({checkId:c.id,status:statuses[n],finding:'Synthetic service is stopped',operationIds:statuses[n]==='incomplete'?[]:[op.id]}))}
+  const submitted=f.inspections.submit(f.profile.profile.id,input),report=f.inspections.report({serverId:f.server.id,id:submitted.id})
+  return {...f,plan,report,input,op}
+ }
+ it('binds dashboard measurements to successful same-item operations and the current inspection window',async()=>{
+  const f=await reviewFixture(['normal']),base={kind:'cpu' as const,usagePercent:12.5,observedAt:f.op.createdAt,operationId:f.op.id}
+  const submit=(metrics:unknown,extra:Record<string,unknown>={})=>f.inspections.submit(f.profile.profile.id,{...f.input,requestKey:randomUUID(),items:[{...f.input.items[0],section:'system',metrics,...extra}]})
+  const saved=submit([base]);expect(f.inspections.report({serverId:f.server.id,id:saved.id}).items[0].metrics).toEqual([base])
+  for(const [metrics,extra]of [[[base,base],{}],[[{...base,observedAt:f.input.startedAt-1}],{}],[[{...base,observedAt:f.input.finishedAt+1}],{}],[[{...base,operationId:randomUUID()}],{}],[[base],{section:'custom'}],[[base],{status:'incomplete'}]] as [unknown,Record<string,unknown>][]){expect(()=>submit(metrics,extra)).toThrow(expect.objectContaining({code:'INSPECTION_EVIDENCE'}))}
+  const failed=f.operations.start(f.profile.profile.id,{serverId:f.server.id,requestKey:'synthetic-failed-metric',command:'synthetic failure',cwd:'/'})
+  f.operations.decide({id:failed.id,approve:true});await vi.waitFor(()=>expect(f.operations.get(failed.id).state).toBe('failed'))
+  expect(()=>f.inspections.submit(f.profile.profile.id,{...f.input,requestKey:randomUUID(),finishedAt:Date.now(),items:[{...f.input.items[0],status:'abnormal',section:'system',operationIds:[failed.id],metrics:[{...base,operationId:failed.id,observedAt:Date.now()}]}]})).toThrow(expect.objectContaining({code:'INSPECTION_EVIDENCE'}))
+ })
+ it('ignores individual anomalies, recomputes all views, supports undo and preserves immutable evidence/idempotency',async()=>{
+  const f=await reviewFixture(['abnormal','abnormal']),raw=f.servers.store.db.prepare('SELECT detail FROM inspection_reports WHERE id=?').get(f.report.id)!.detail
+  const once=f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:0,ignored:true,reason:'Synthetic expected stop'})
+  expect(once.status).toBe('abnormal');expect(once.ignoredCount).toBe(1);expect(once.items[0].status).toBe('abnormal')
+  const both=f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-2',revision:1,ignored:true,reason:'Synthetic known exception'})
+  expect(both.status).toBe('normal');expect(both.originalStatus).toBe('abnormal');expect(both.reviewRevision).toBe(2)
+  expect(f.inspections.reports({serverId:f.server.id}).reports[0]).toMatchObject({status:'normal',ignoredCount:2,counts:{abnormal:0}})
+  expect(f.inspections.catalog({kind:'reports',status:'abnormal'}).total).toBe(0);expect(f.inspections.catalog({kind:'plans'}).plans[0].latest?.status).toBe('normal')
+  expect(f.servers.store.db.prepare('SELECT detail FROM inspection_reports WHERE id=?').get(f.report.id)!.detail).toEqual(raw)
+  expect(f.inspections.submit(f.profile.profile.id,f.input).id).toBe(f.report.id)
+  expect(()=>f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:0,ignored:false})).toThrow(expect.objectContaining({code:'CONTEXT_CHANGED'}))
+  expect(f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:2,ignored:false}).status).toBe('abnormal')
+  expect(readFileSync(join(f.dir,'assets.sqlite')).includes(Buffer.from('Synthetic expected stop'))).toBe(false)
+  f.servers.lock();expect(()=>f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:3,ignored:true})).toThrow(expect.objectContaining({code:'VAULT_LOCKED'}))
+ })
+ it('removes encrypted reviews when their server is deleted',async()=>{const f=await reviewFixture(['abnormal']);f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:0,ignored:true});f.servers.deleteServer(f.server.id);expect(f.servers.store.db.prepare('SELECT value FROM metadata WHERE key=?').get('inspection-review:'+f.report.id)).toBeUndefined()})
+ it('never treats an unperformed check as normal through ignoring another anomaly',async()=>{
+  const f=await reviewFixture(['abnormal','incomplete'])
+  expect(f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:0,ignored:true}).status).toBe('incomplete')
+  expect(()=>f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-2',revision:1,ignored:true})).toThrow(expect.objectContaining({code:'INSPECTION_EVIDENCE'}))
+ })
+ it('atomically appends a reviewed exception without adding checks or rewriting report snapshots',async()=>{
+  const f=await reviewFixture(['abnormal']),w=f.inspections.workspace(f.server.id),instruction='Synthetic service may remain stopped.'
+  const request={serverId:f.server.id,id:f.report.id,checkId:'check-1',planRevision:w.plan!.revision,serverRevision:w.serverRevision,contextDigest:w.contextDigest,reviewRevision:0,instruction,ignoreCurrent:true,reason:'Synthetic intended state',locale:'en'}
+  const result=f.inspections.saveException(request);expect(result.status).toBe('normal');expect(result.plan.revision).toBe(1);expect(result.plan.markdown).not.toContain('Confirmed exceptions')
+  const next=f.inspections.workspace(f.server.id).plan!;expect(next.revision).toBe(2);expect(next.markdown).toContain('**Confirmed exceptions**');expect(next.markdown).toContain(instruction);expect(next.checks).toHaveLength(1)
+  expect(()=>f.inspections.saveException(request)).toThrow(expect.objectContaining({code:'CONTEXT_CHANGED'}));expect(f.inspections.workspace(f.server.id).plan?.revision).toBe(2)
+  const second={...request,planRevision:2,reviewRevision:1,instruction:'x'.repeat(51)}
+  expect(()=>f.inspections.saveException(second)).toThrow();expect(f.inspections.workspace(f.server.id).plan?.revision).toBe(2)
+  f.inspections.removeReport({serverId:f.server.id,id:f.report.id});expect(f.servers.store.db.prepare('SELECT value FROM metadata WHERE key=?').get(`inspection-review:${f.report.id}`)).toBeUndefined()
+ })
+ it('rolls back a failed ignore together with checklist changes',async()=>{
+  const f=await reviewFixture(['abnormal']),w=f.inspections.workspace(f.server.id),original=f.inspections.ignore.bind(f.inspections)
+  f.inspections.ignore=()=>{throw Error('synthetic review write failure')}
+  expect(()=>f.inspections.saveException({serverId:f.server.id,id:f.report.id,checkId:'check-1',planRevision:1,serverRevision:w.serverRevision,contextDigest:w.contextDigest,reviewRevision:0,instruction:'Synthetic service may remain stopped.',ignoreCurrent:true,locale:'en'})).toThrow('synthetic review write failure')
+  f.inspections.ignore=original;expect(f.inspections.workspace(f.server.id).plan?.revision).toBe(1);expect(f.inspections.report({serverId:f.server.id,id:f.report.id}).ignoredCount).toBe(0)
+ })
+ it.each(['openai','anthropic'] as const)('generates a 50-character %s exception draft with consent and no save/SSH side effects',async provider=>{
+  const requests:string[]=[];let output={instruction:'Synthetic service may remain stopped.',needsClarification:false},invalidate=()=>{}
+  const fetcher:typeof fetch=async(_url,init)=>{requests.push(String(init?.body));invalidate();return new Response(JSON.stringify(provider==='openai'?{choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'synthetic-exception',type:'function',function:{name:'submit_inspection_exception',arguments:JSON.stringify(output)}}]}}]}:{stop_reason:'tool_use',content:[{type:'tool_use',id:'synthetic-exception',name:'submit_inspection_exception',input:output}]}))}
+  const f=await reviewFixture(['abnormal'],fetcher),config=f.ai.save({revision:0,provider,baseUrl:'https://synthetic-ai.invalid/v1',apiKey:'synthetic-provider-key',model:'synthetic-model'}),sessions=f.remote.sessions
+  const request={serverId:f.server.id,id:f.report.id,checkId:'check-1',reason:'Synthetic service is intentionally stopped.',aiRevision:config.revision,consent:true,locale:'en'}
+  await expect(f.inspections.draftException({...request,consent:false},()=>{})).rejects.toMatchObject({code:'INVALID_INPUT'})
+  const result=await f.inspections.draftException(request,()=>{});expect(Array.from(result.instruction).length).toBeLessThanOrEqual(50);expect(result.planRevision).toBe(1);expect(f.inspections.workspace(f.server.id).plan?.revision).toBe(1);expect(f.remote.sessions).toBe(sessions);expect(requests[0]).not.toContain('target-secret')
+  output={instruction:'',needsClarification:true};await expect(f.inspections.draftException(request,()=>{})).rejects.toMatchObject({code:'INSPECTION_EXCEPTION'})
+  output={instruction:'x'.repeat(51),needsClarification:false};await expect(f.inspections.draftException(request,()=>{})).rejects.toMatchObject({code:'INVALID_INPUT'})
+  output={instruction:'Synthetic service may remain stopped.',needsClarification:false};invalidate=()=>{f.inspections.ignore({serverId:f.server.id,id:f.report.id,checkId:'check-1',revision:0,ignored:true})}
+  await expect(f.inspections.draftException(request,()=>{})).rejects.toMatchObject({code:'CONTEXT_CHANGED'})
+ })
+
+
+ it('queries standalone desktop catalogs with current checklists, historical snapshots, filters and pagination',async()=>{
+  const f=await fixture(),first=f.save()
+  const other=f.servers.saveServer({name:'Synthetic other host',host:'other.invalid',port:22,username:'synthetic-user',credentialId:null}),w=f.inspections.workspace(other.id)
+  f.inspections.save({serverId:other.id,serverRevision:w.serverRevision,contextDigest:w.contextDigest,revision:0,title:'Another checklist',markdown:'## Other check\nRead system status.',applicationIds:[]})
+  const tag={id:randomUUID(),name:'Synthetic classification',color:'#80cbb4'};new ServerTagsService(f.servers).save({revision:0,tags:[tag],assignments:{[f.server.id]:[tag.id]}})
+  for(let n=0;n<12;n++)f.inspections.submit(f.profile.profile.id,{...f.input(first),requestKey:'catalog-'+n})
+  const catalog=f.inspections.catalog({kind:'plans'});expect(catalog.total).toBe(2);expect(catalog.configuredServerIds).toContain(other.id)
+  expect(f.inspections.catalog({kind:'plans',tagId:tag.id}).plans.map(p=>p.serverId)).toEqual([f.server.id])
+  expect(f.inspections.catalog({kind:'plans',query:'Another checklist'}).plans[0].latest).toBeNull()
+  const rows=f.inspections.catalog({kind:'reports',serverId:f.server.id,status:'incomplete'});expect(rows.total).toBe(12);expect(rows.reports).toHaveLength(10);expect(f.inspections.catalog({kind:'reports',offset:10}).reports).toHaveLength(2)
+  expect(f.inspections.catalog({kind:'reports',status:'abnormal'}).total).toBe(0)
+  expect(f.inspections.catalog({kind:'reports',from:Date.now()+1000}).total).toBe(0)
+  f.save('## New saved step\nRead service state.',first.revision)
+  expect(f.inspections.catalog({kind:'reports'}).reports[0].planRevision).toBe(first.revision)
+  expect(f.inspections.catalog({kind:'plans',serverId:f.server.id}).plans[0].revision).toBe(first.revision+1)
+  f.inspections.removeReport({serverId:f.server.id,id:rows.reports[0].id});expect(f.inspections.catalog({kind:'reports'}).total).toBe(11)
+  expect(()=>f.inspections.catalog({kind:'reports',from:100,to:1})).toThrow()
+  f.servers.lock();expect(()=>f.inspections.catalog({kind:'plans'})).toThrow()
+ })
  it('derives version-bound checks without treating fenced Markdown as executable content',()=>{
   expect(inspectionChecks('## First\n```sh\n## not a check\n```\n## Second')).toEqual([{id:'check-1',title:'First'},{id:'check-2',title:'Second'}])
   const html=renderToStaticMarkup(createElement(MarkdownDocument,{text:'## Safe\n<img src="https://synthetic.invalid/pixel">\n<script>synthetic()</script>\n![image](https://synthetic.invalid)'}))
@@ -166,6 +255,20 @@ describe('server inspection workflow',()=>{
   expect(unpack(await client.callTool({name:'get_inspection_plan',arguments:{serverId:f.server.id}})).plan.digest).toBe(plan.digest)
   const saved=unpack(await client.callTool({name:'submit_inspection_report',arguments:f.input(plan)}));expect(saved.status).toBe('incomplete');expect(f.remote.sessions).toBe(0)
   expect(f.inspections.report({serverId:f.server.id,id:saved.id}).profileName).toBe('Synthetic inspection agent')
+ })
+ it('carries current sampled values through authenticated MCP, encrypted reports and production HTML rendering',async()=>{
+  const f=await fixture(),plan=f.save('## Synthetic resources\nRead current utilization and capacity.'),mcp=new LocalMcpServer(f.operations,0,f.applications,undefined,f.inspections);cleanup.push(()=>mcp.stop());const endpoint=(await mcp.start()).url!
+  const client=new Client({name:'Synthetic dashboard client',version:'1'});cleanup.push(()=>client.close())
+  await client.connect(new StreamableHTTPClientTransport(new URL(endpoint),{requestInit:{headers:{Authorization:`Bearer ${f.profile.token}`}}}))
+  const unpack=(r:unknown)=>JSON.parse((r as {content:{text:string}[]}).content[0].text)
+  const fetched=unpack(await client.callTool({name:'get_inspection_plan',arguments:{serverId:f.server.id}}));expect(fetched.reportingGuidance).toContain('Dashboard report submission')
+  const startedAt=Date.now(),operation=unpack(await client.callTool({name:'start_command',arguments:{serverId:f.server.id,requestKey:'synthetic-dashboard-sample',command:'synthetic dashboard samples',cwd:'/'}}))
+  f.operations.decide({id:operation.id,approve:true});await vi.waitFor(()=>expect(f.operations.get(operation.id).state).toBe('succeeded'))
+  const output=unpack(await client.callTool({name:'read_output',arguments:{id:operation.id,cursor:0}})),sample=JSON.parse(output.chunks.map((c:{text:string})=>c.text).join('').trim()),observedAt=f.operations.get(operation.id).updatedAt
+  const result=unpack(await client.callTool({name:'submit_inspection_report',arguments:{...f.input(plan),requestKey:'synthetic-live-dashboard-report',startedAt,finishedAt:Date.now(),summary:'Synthetic actual loopback resource samples',items:[{checkId:plan.checks[0].id,status:'normal',section:'system',finding:'Synthetic current samples collected',operationIds:[operation.id],metrics:[{kind:'cpu',usagePercent:sample.cpu,observedAt,operationId:operation.id},{kind:'memory',usedBytes:sample.memoryUsed,totalBytes:sample.memoryTotal,observedAt,operationId:operation.id},{kind:'disk',mount:'/synthetic',usedBytes:sample.diskUsed,totalBytes:sample.diskTotal,observedAt,operationId:operation.id}]}]}}))
+  expect(result.status).toBe('normal');const report=f.inspections.report({serverId:f.server.id,id:result.id}),html=reportHtml({serverName:'Synthetic dashboard target',report})
+  expect(report.items[0].metrics).toHaveLength(3);expect(html).toContain('21.5');expect(html).toContain('4 KiB');expect(html).toContain('/synthetic');expect(f.remote.sessions).toBe(1)
+  expect(readFileSync(join(f.dir,'assets.sqlite')).includes(Buffer.from('Synthetic actual loopback resource samples'))).toBe(false)
  })
  it('backs up the current handbook, remaps application references on restore and excludes report history',async()=>{
   const f=await fixture(),target=await fixture(),app=f.applications.save({serverId:f.server.id,revision:0,name:'Synthetic app',aliases:[],description:'',environment:'',deploymentPath:'/srv/fixture',runtime:'unknown',runtimeTarget:'',logSources:[]})

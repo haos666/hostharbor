@@ -1,3 +1,5 @@
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { msg, errorText } from '../../../shared/i18n'
 import { QueryChecks } from './QueryChecks'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
@@ -55,8 +57,9 @@ export function ApprovalSettings({ status, servers, onRefresh, onSetup, profileI
   const open = (job: () => void) => { setError(''); job() }
   const errorView = error && <p className="drawer-error" role="alert">{error}</p>
   const aiProvider = ai?.activeProvider, aiEntry = aiProvider ? ai?.providers[aiProvider] : null
+  if (!unlocked) return <LockedPage label={profileId?profiles[0]?.name:msg('aiSettings.settings')} title={msg(profileId?'channel.policy':'globalApproval.title')} status={status} onRefresh={onRefresh} onSetup={onSetup}/>
   return <section className="approval-settings">
-    <header className="credentials-header"><div className="credentials-title"><span className="page-label">{profileId?profiles[0]?.name:msg('aiSettings.settings')}</span><h1>{msg(profileId?'channel.policy':'globalApproval.title')}</h1></div></header>
+    <PageHeader label={profileId?profiles[0]?.name:msg('aiSettings.settings')} title={msg(profileId?'channel.policy':'globalApproval.title')}/>
     {!unlocked ? <UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup} /> : !policy ? <>{errorView}<button className="credential-secondary" onClick={() => void reload()}>{msg('aiSettings.reload')}</button></> : <>
       {!editing && !deleting && !mode && !aiConfirm && error && <>{errorView}<button className="credential-secondary" disabled={busy} onClick={() => void reload()}>{msg('approvalSettings.reloadPolicy')}</button></>}
       {!profileId&&<section className="global-approval-controls"><label><div><strong>{msg('globalApproval.force')}</strong><p>{msg('globalApproval.forceHelp')}</p></div><input type="checkbox" role="switch" checked={!!policy.forceApproval} disabled={busy} onChange={e=>void save({...policy,forceApproval:e.target.checked})}/></label><label><div><strong>{msg('globalApproval.deny')}</strong><p>{msg('globalApproval.denyHelp')}</p></div><input type="checkbox" role="switch" checked={policy.denyExecution??policy.mode==='paused'} disabled={busy} onChange={e=>void save({...policy,mode:policy.mode==='paused'?'all-approval':policy.mode,denyExecution:e.target.checked})}/></label></section>}

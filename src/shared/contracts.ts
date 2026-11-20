@@ -1,4 +1,5 @@
-export type Section = 'servers' | 'credentials' | 'connections' | 'operations' | 'audit' | 'settings'
+import type { ServerTags } from './server-tags'
+export type Section = 'servers' | 'inspections' | 'credentials' | 'connections' | 'operations' | 'audit' | 'settings'
 import type { Result } from './errors'
 
 export interface AppStatus {
@@ -22,6 +23,12 @@ export interface ApprovalReminder { sequence: number; count: number; operationId
 export interface ApprovalNavigation { operationId?: string; sequence: number }
 
 export interface HostHarborApi {
+  ignoreInspectionFinding(input: import('zod').z.input<typeof import('./inspection').inspectionIgnoreSchema>):Promise<Result<import('./inspection').InspectionReport>>
+  draftInspectionException(input: import('zod').z.input<typeof import('./inspection').inspectionExceptionDraftSchema>):Promise<Result<import('./inspection').InspectionExceptionDraft>>
+  saveInspectionException(input: import('zod').z.input<typeof import('./inspection').inspectionExceptionSaveSchema>):Promise<Result<import('./inspection').InspectionReport>>
+  openInspectionDashboard(input:{serverId:string;id:string}):Promise<Result<void>>
+  exportInspectionReport(input:{serverId:string;id:string;format:'md'|'docx'|'html'}):Promise<Result<{name:string}|null>>
+  queryInspectionCatalog(input: import('./inspection').InspectionCatalogQuery): Promise<Result<import('./inspection').InspectionCatalogPage>>
   getInspectionWorkspace(serverId: string): Promise<Result<import('./inspection').InspectionWorkspace>>
   saveInspectionPlan(input: import('./inspection').InspectionSave): Promise<Result<import('./inspection').InspectionPlan>>
   draftInspectionPlan(input: import('./inspection').InspectionDraftInput): Promise<Result<import('./inspection').InspectionDraft>>
@@ -34,6 +41,8 @@ export interface HostHarborApi {
   previewBackup(input: { fileId: string; password: string }): Promise<Result<import('./backup').BackupPreview>>
   commitBackup(input: import('./backup').BackupSelection): Promise<Result<import('./backup').BackupImportResult>>
   cancelBackup(): Promise<Result<void>>
+  getReportStyle(): Promise<Result<import('./report-style').ReportBackground>>
+  saveReportStyle(background: import('./report-style').ReportBackground): Promise<Result<import('./report-style').ReportBackground>>
   getLanguage(): Promise<Result<import('./i18n').LanguageSettings>>
   saveLanguage(preference: import('./i18n').LanguagePreference): Promise<Result<import('./i18n').LanguageSettings>>
   onLanguageChanged(listener: (settings: import('./i18n').LanguageSettings) => void): () => void
@@ -102,10 +111,16 @@ export interface HostHarborApi {
   resetPassword(input: { recovery: string; newPassword: string }): Promise<Result<void>>
   changeRecovery(input: { currentPassword: string; currentRecovery: string; newRecovery: string }): Promise<Result<void>>
   lockVault(): Promise<Result<void>>
+  getServerTags(): Promise<Result<ServerTags>>
+  saveServerTags(input: ServerTags): Promise<Result<ServerTags>>
+  listProxies(): Promise<Result<SocksProxy[]>>
+  saveProxy(input: SocksProxyInput): Promise<Result<SocksProxy>>
+  deleteProxy(input: { id: string; revision: number }): Promise<Result<void>>
   listServers(): Promise<Result<ServerRecord[]>>
   saveServer(input: ServerInput): Promise<Result<ServerRecord>>
   deleteServer(id: string): Promise<Result<void>>
   listCredentials(): Promise<Result<CredentialSummary[]>>
+  importPrivateKeyPath(path:string):Promise<Result<string>>
   saveCredential(input: CredentialInput): Promise<Result<CredentialSummary>>
   deleteCredential(id: string): Promise<Result<void>>
   testConnection(id: string): Promise<Result<ConnectionTest>>
@@ -115,7 +130,10 @@ export interface HostHarborApi {
 export type ServerRoute =
   | { type: 'direct' }
   | { type: 'ssh-jump'; serverId: string }
-  | { type: 'socks5'; host: string; port: number; authentication: { type: 'none' } | { type: 'password'; username: string; credentialId: string } }
+  | { type: 'socks5'; proxyId?: string; host: string; port: number; authentication: { type: 'none' } | { type: 'password'; username: string; credentialId: string } }
+
+export interface SocksProxyInput { id?: string; revision?: number; name: string; route: Extract<ServerRoute, { type: 'socks5' }> }
+export interface SocksProxy extends SocksProxyInput { id: string; revision: number }
 
 export type ServerElevation = { type: 'none' } | { type: 'sudo'; passwordSource: 'none' | 'login' | 'credential'; credentialId?: string }
 export interface ServerInput {

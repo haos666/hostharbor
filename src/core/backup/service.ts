@@ -1,3 +1,4 @@
+import { ServerTagsService, serverTagsKey } from '../servers/tags'
 import { inspectionChecks, inspectionDocumentSchema } from '../../shared/inspection'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, renameSync } from 'node:fs'
@@ -85,12 +86,15 @@ export class BackupService {
       return { ...server, sourceRevision: record.revision, applications, ...(inspection ? {inspection} : {}), ...(dossier ? { dossier } : {}), ...(files ? { files } : {}) }
     })
     const hosts = this.db.prepare('SELECT * FROM known_hosts ORDER BY host,port').all().filter(h => servers.some(s => s.host === h.host && s.port === h.port)).map(h => ({ host: String(h.host), port: Number(h.port), key: Buffer.from(h.key as Uint8Array).toString('base64'), fingerprint: String(h.fingerprint), confirmedAt: Number(h.confirmedAt) }))
-    return validatePortable({ version: 1, createdAt: Date.now(), credentials, servers, hosts })
+    const serverTags=new ServerTagsService(this.servers).get()
+    return validatePortable({ ...(serverTags.tags.length ? {serverTags} : {}), ...(this.servers.listProxies().length?{proxies:this.servers.listProxies()}:{}), version: 1, createdAt: Date.now(), credentials, servers, hosts })
   }
   private stamp(): string {
     const digest = createHash('sha256')
     for (const table of ['credentials', 'servers', 'known_hosts', 'applications', 'server_dossiers', 'inspection_plans']) for (const row of this.db.prepare(`SELECT * FROM ${table} ORDER BY ${table === 'known_hosts' ? 'host,port' : table === 'inspection_plans' ? 'serverId,revision' : table === 'server_dossiers' ? 'serverId' : 'id'}`).all()) digest.update(JSON.stringify(row))
     for (const row of this.db.prepare("SELECT * FROM metadata WHERE key LIKE 'files:settings:v2:%' ORDER BY key").all()) digest.update(JSON.stringify(row))
+    const tagRow=this.db.prepare('SELECT value FROM metadata WHERE key=?').get(serverTagsKey);if(tagRow)digest.update(tagRow.value as Uint8Array)
+    const proxyRow=this.db.prepare('SELECT value FROM metadata WHERE key=?').get('socks-proxies:v1');if(proxyRow)digest.update(proxyRow.value as Uint8Array)
     return digest.digest('hex')
   }
   private async read(file: string): Promise<Buffer> {
@@ -150,7 +154,7 @@ export class BackupService {
       const dependencyBlocked = dependencies.some(id => items.find(i => i.id === id)?.status === 'blocked')
       const route = s.route.type === 'ssh-jump' ? { ...s.route, serverId: serverMap.get(s.route.serverId) ?? `new:${s.route.serverId}` } : s.route.type === 'socks5' && s.route.authentication.type === 'password' ? { ...s.route, authentication: { ...s.route.authentication, credentialId: credentialMap.get(s.route.authentication.credentialId) ?? `new:${s.route.authentication.credentialId}` } } : s.route
       const elevation = s.elevation.type === 'sudo' && s.elevation.passwordSource === 'credential' ? { ...s.elevation, credentialId: credentialMap.get(s.elevation.credentialId!) ?? `new:${s.elevation.credentialId}` } : s.elevation
-      const value = (x: typeof s | typeof local.servers[number], cid: unknown, r: unknown, e: unknown) => canonical({ name:x.name,host:x.host,port:x.port,username:x.username,credentialId:cid,route:r,elevation:e })
+      const value = (x: typeof s | typeof local.servers[number], cid: unknown, r: unknown, e: unknown) => canonical({ name:x.name,host:x.host,port:x.port,username:x.username,credentialId:cid,route: typeof r === 'object' && r !== null ? Object.fromEntries(Object.entries(r).filter(([key])=>key!=='proxyId')) : r,elevation:e })
       const same = !hostConflict && !dependencyBlocked && local.servers.find(l => value(l,l.credentialId,l.route,l.elevation) === value(s,s.credentialId ? credentialMap.get(s.credentialId) ?? `new:${s.credentialId}` : null,route,elevation) && related(l) === related(s) && (pin?.key ?? null) === (known?.key ?? null))
       if (same) serverMap.set(s.id, same.id)
       const status = hostConflict || dependencyBlocked ? 'blocked' : same ? 'duplicate' : local.servers.some(l => l.name === s.name || (l.host === s.host && l.port === s.port && l.username === s.username)) ? 'conflict' : 'new'
@@ -197,17 +201,30 @@ export class BackupService {
           if (item.dependencies.some(id => !selected.has(id) && !plan.credentialMap.has(id) && !plan.serverMap.has(id))) throw new AppError('BACKUP_DEPENDENCY')
         }
         const result: BackupImportResult = {credentials:0,servers:0,skipped:0}, now=Date.now()
+        const restoredTags=new Map<string,string>()
         this.db.exec('BEGIN IMMEDIATE')
         try {
           for (const c of p.credentials.filter(c => selected.has(c.id) && !plan.credentialMap.has(c.id))) {
             const {id,...input}=c; const saved=this.servers.saveCredential(input);plan.credentialMap.set(id,saved.id);result.credentials++
           }
+          const proxyMap = new Map<string,string>()
+          for(const source of p.proxies??[]) {
+            const a=source.route.authentication
+            if(a.type==='password'&&!plan.credentialMap.has(a.credentialId))continue
+            const route={...source.route,authentication:a.type==='password'?{...a,credentialId:plan.credentialMap.get(a.credentialId)!}:a}
+            const existing=this.servers.listProxies().find(p=>canonical(p.route)===canonical(route))
+            if(existing){proxyMap.set(source.id,existing.id);continue}
+            let name=source.name
+            while(this.servers.listProxies().some(p=>p.name.toLocaleLowerCase('en-US')===name.toLocaleLowerCase('en-US')))name=source.name.slice(0,70)+' (import '+randomUUID().slice(0,8)+')'
+            proxyMap.set(source.id,this.servers.saveProxy({name,route}).id)
+          }
           for (const s of [...p.servers].sort((a,b)=>Number(a.route.type==='ssh-jump')-Number(b.route.type==='ssh-jump')).filter(s=>selected.has(s.id)&&!plan.serverMap.has(s.id))) {
             const {id,sourceRevision,dossier,applications,files,inspection,...input}=s
             const route = input.route.type==='ssh-jump' ? {...input.route,serverId:plan.serverMap.get(input.route.serverId)!} : input.route.type==='socks5'&&input.route.authentication.type==='password' ? {...input.route,authentication:{...input.route.authentication,credentialId:plan.credentialMap.get(input.route.authentication.credentialId)!}} : input.route
+            if(route.type==='socks5'&&route.proxyId){const mapped=proxyMap.get(route.proxyId);if(!mapped)throw new AppError('BACKUP_DEPENDENCY');route.proxyId=mapped}
             const elevation = input.elevation.type==='sudo'&&input.elevation.passwordSource==='credential' ? {...input.elevation,credentialId:plan.credentialMap.get(input.elevation.credentialId!)!} : input.elevation
             const saved=this.servers.saveServer({...input,credentialId:input.credentialId?plan.credentialMap.get(input.credentialId)!:null,route,elevation})
-            plan.serverMap.set(id,saved.id);result.servers++
+            plan.serverMap.set(id,saved.id);restoredTags.set(id,saved.id);result.servers++
             if (dossier) this.saveDetail('server_dossiers',saved.id,`server-dossier:${saved.id}`,{run:null,report:{...dossier,corrections:undefined,serverRevision:saved.revision,snapshot:'restored-backup',evidence:[],restoredAt:now},...(dossier.corrections?{corrections:dossier.corrections}:{})})
             const applicationMap = new Map<string,string>()
             for (const a of applications) {
@@ -224,6 +241,7 @@ export class BackupService {
             const pin=p.hosts.find(h=>h.host===s.host&&h.port===s.port)
             if(pin&&!this.servers.store.getHost(pin.host,pin.port))this.db.prepare('INSERT INTO known_hosts(host,port,key,fingerprint,confirmedAt) VALUES(?,?,?,?,?)').run(pin.host,pin.port,Buffer.from(pin.key,'base64'),pin.fingerprint,pin.confirmedAt)
           }
+          if(p.serverTags && restoredTags.size)new ServerTagsService(this.servers).restore(p.serverTags,restoredTags)
           this.db.exec('COMMIT')
         }catch(error){this.db.exec('ROLLBACK');throw error}
         result.skipped=p.credentials.length+p.servers.length-result.credentials-result.servers

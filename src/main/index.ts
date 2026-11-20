@@ -1,8 +1,12 @@
+import { ReportStyleSettingsStore } from './report-style-settings'
+import { DesktopInspectionReports } from './inspection-report-files'
+import { pathToFileURL } from 'node:url'
+import { readPrivateKeyFile } from './private-key-file'
 import { DesktopApprovalNotifications } from './notifications/service'
 import { DesktopBackup } from './backup'
 import { IdleLockService } from './idle-lock'
 import { copyMcpInstallation } from './mcp-installation'
-import { app, BrowserWindow, clipboard, ipcMain, powerMonitor, dialog } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, powerMonitor, dialog, shell } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AppStatus } from '../shared/contracts'
@@ -62,6 +66,7 @@ else {
     const directory = app.getPath('userData')
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     const language = new LanguageSettingsStore(directory)
+    const reportStyle = new ReportStyleSettingsStore(directory)
     const syncLanguage = (notify = false): LanguageSettings => {
       const preference = language.get()
       const locale = resolveLanguage(preference, app.getPreferredSystemLanguages())
@@ -82,6 +87,10 @@ else {
       async save() { const result = await dialog.showSaveDialog(window!, { title: msg('backup.export'), defaultPath: `HostHarbor-${new Date().toISOString().slice(0,10)}.hhbackup`, filters: [{ name: 'HostHarbor', extensions: ['hhbackup'] }] }); return result.canceled ? null : result.filePath ?? null },
       async open() { const result = await dialog.showOpenDialog(window!, { title: msg('backup.import'), properties: ['openFile'], filters: [{ name: 'HostHarbor', extensions: ['hhbackup'] }] }); return result.canceled ? null : result.filePaths[0] ?? null },
     })
+    const reportFiles=new DesktopInspectionReports(core,()=>security.lockRevision,join(directory,'inspection-previews'),{
+      async save(format,filename){const result=await dialog.showSaveDialog(window!,{title:msg('reportFiles.export'),defaultPath:filename,filters:[{name:format==='docx'?'Word':format==='html'?'HTML':'Markdown',extensions:[format]}]});return result.canceled?null:result.filePath??null},
+      async open(path){await shell.openExternal(pathToFileURL(path).href)},
+    },()=>reportStyle.get())
     idleLock = new IdleLockService(directory, core, () => security.lockRevision, () => powerMonitor.getSystemIdleTime(), lockVault)
     ipcMain.handle('app:get-status', async (event): Promise<AppStatus> => {
       assertSender(event)
@@ -90,6 +99,12 @@ else {
       return { backgroundMcp: state.backgroundMcp, pendingApprovals: state.pendingApprovals, version: app.getVersion(), core: core.state, vault: revision !== security.lockRevision ? 'locked' : state.vault === 'not-configured' && keys.mode !== 'not-configured' ? 'locked' : state.vault, lockRevision: security.lockRevision, security: keys.mode, mcp: state.mcp.running ? 'running' : 'stopped' }
     })
     const handlers: Record<string, (payload: unknown) => Promise<unknown>> = {
+      'inspection:ignore': p => core.call('ignoreInspectionFinding',p),
+      'inspection:draft-exception': p => core.call('draftInspectionException',p),
+      'inspection:save-exception': p => core.call('saveInspectionException',p),
+      'inspection:open-dashboard': p => reportFiles.open(p),
+      'inspection:export-report': p => reportFiles.export(p),
+      'inspection:catalog': p => core.call('queryInspectionCatalog',p),
       'inspection:workspace': p => core.call('getInspectionWorkspace', p),
       'inspection:save': p => core.call('saveInspectionPlan', p),
       'inspection:draft': p => core.call('draftInspectionPlan', p),
@@ -102,6 +117,8 @@ else {
       'backup:preview': payload => backup.preview(payload),
       'backup:commit': payload => backup.commit(payload as import('../shared/backup').BackupSelection),
       'backup:cancel': () => backup.cancel(),
+      'report-style:get': async () => reportStyle.get(),
+      'report-style:save': async payload => reportStyle.save(payload),
       'language:get': async () => syncLanguage(),
       'language:save': async payload => {
         language.save(payload)
@@ -155,9 +172,12 @@ else {
       'security:setup': (payload) => security.setup(payload), 'vault:unlock': async (payload) => { idleLock?.reset(); await security.unlock(payload, true); idleLock?.reset() },
       'security:password': (payload) => security.changePassword(payload), 'security:reset': (payload) => security.resetPassword(payload),
       'security:recovery': (payload) => security.changeRecovery(payload), 'vault:lock': () => lockVault(),
+      'servers:tags:get': () => core.call('getServerTags'), 'servers:tags:save': payload => core.call('saveServerTags', payload),
+      'proxies:list': () => core.call('listProxies'), 'proxies:save': p => core.call('saveProxy',p), 'proxies:delete': p => core.call('deleteProxy',p),
       'servers:list': () => core.call('listServers'), 'servers:save': (payload) => core.call('saveServer', payload),
       'servers:delete': (payload) => core.call('deleteServer', payload),
       'credentials:list': () => core.call('listCredentials'), 'credentials:save': (payload) => core.call('saveCredential', payload),
+      'credentials:import-key-path': async payload => {const revision=security.lockRevision;return readPrivateKeyFile(payload,async()=>{const state=await core.call<{vault:string}>('status');if(state.vault!=='unlocked'||revision!==security.lockRevision)throw new AppError('VAULT_LOCKED')})},
       'credentials:delete': (payload) => core.call('deleteCredential', payload),
       'servers:test': (payload) => core.call('testConnection', payload), 'hosts:trust': (payload) => core.call('trustHost', payload),
     }
@@ -166,7 +186,7 @@ else {
         assertSender(event)
         const revision = security.lockRevision
         const value = await handler(payload)
-        if (revision !== security.lockRevision && !channel.startsWith('security:') && !channel.startsWith('language:') && channel !== 'vault:lock') throw new AppError('VAULT_LOCKED')
+        if (revision !== security.lockRevision && !channel.startsWith('security:') && !channel.startsWith('language:') && !channel.startsWith('report-style:') && channel !== 'vault:lock') throw new AppError('VAULT_LOCKED')
         return { ok: true, value }
       }
       catch (error) { return failure(error) }

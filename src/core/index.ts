@@ -1,3 +1,4 @@
+import { ServerTagsService } from './servers/tags'
 import { InspectionService } from './inspection/service'
 import { FileService } from './files/service'
 import { BackupService } from './backup/service'
@@ -45,6 +46,10 @@ port.on('message', (event) => {
 async function dispatch(method: string, payload: unknown): Promise<unknown> {
   if (!desktopPublicMethods.has(method)) desktop.assertOpen()
   switch (method) {
+    case 'ignoreInspectionFinding': return inspections.ignore(payload)
+    case 'draftInspectionException': {const revision=desktop.revision;return inspections.draftException(payload,()=>desktop.assertRevision(revision))}
+    case 'saveInspectionException': return inspections.saveException(payload)
+    case 'queryInspectionCatalog': return inspections.catalog(payload)
     case 'getInspectionWorkspace': return inspections.workspace(payload)
     case 'saveInspectionPlan': return inspections.save(payload)
     case 'draftInspectionPlan': { const revision = desktop.revision; return inspections.draft(payload, () => desktop.assertRevision(revision)) }
@@ -115,6 +120,11 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
       return
     }
     case 'lock': backup.clear(); return desktop.lock(true)
+    case 'getServerTags': return new ServerTagsService(service).get()
+    case 'saveServerTags': return new ServerTagsService(service).save(payload)
+    case 'listProxies': return service.migrateProxies()
+    case 'saveProxy': return service.saveProxy(payload)
+    case 'deleteProxy': return service.deleteProxy(payload)
     case 'listServers': return service.listServers()
     case 'saveServer': return service.saveServer(payload)
     case 'deleteServer': return service.deleteServer(payload)

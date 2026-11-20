@@ -51,7 +51,8 @@ describe('SSH connection paths', { timeout: 15000 }, () => {
   it.each([false, true])('uses SOCKS5 with auth=%s and sends the hostname to the proxy', async (auth) => {
     const remote = await target(), socks = await proxy(remote.port, { auth })
     const { service, targetCredential, proxyCredential } = setup()
-    const server = service.saveServer(input(remote.port, targetCredential.id, { type: 'socks5', host: '127.0.0.1', port: socks.port, authentication: auth ? { type: 'password', username: 'proxy-user', credentialId: proxyCredential.id } : { type: 'none' } }))
+    const shared=service.saveProxy({name:'Synthetic shared route',route:{type:'socks5',host:'127.0.0.1',port:socks.port,authentication:auth?{type:'password',username:'proxy-user',credentialId:proxyCredential.id}:{type:'none'}}})
+    const server = service.saveServer(input(remote.port,targetCredential.id,{...shared.route,proxyId:shared.id}))
     const first = challenge(await service.testConnection(server.id))
     expect(first.role).toBe('target'); expect(remote.users).toEqual([])
     service.trustHost(first.challengeId)
@@ -59,6 +60,11 @@ describe('SSH connection paths', { timeout: 15000 }, () => {
     expect(remote.users).toEqual(['target-user']); expect(socks.destinations).toEqual(['target.internal', 'target.internal'])
     expect(socks.users).toEqual(auth ? ['proxy-user', 'proxy-user'] : [])
     expect(remote.sessions).toBe(0); await vi.waitFor(() => expect(socks.active + remote.active).toBe(0))
+    const replacement=await proxy(remote.port,{auth})
+    service.saveProxy({...shared,route:{...shared.route,port:replacement.port}})
+    expect((await service.testConnection(server.id)).status).toBe('connected')
+    expect(replacement.destinations).toEqual(['target.internal'])
+    expect(socks.destinations).toHaveLength(2)
   })
   it('rejects incorrect SOCKS credentials and proxy rejection before target authentication', async () => {
     const remote = await target(), socks = await proxy(remote.port, { auth: true })

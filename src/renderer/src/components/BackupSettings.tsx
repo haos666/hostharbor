@@ -1,3 +1,6 @@
+import { Toast } from './Toast'
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Archive, Download, Upload, X } from 'lucide-react'
 import type { AppStatus } from '../../../shared/contracts'
@@ -39,9 +42,10 @@ export function BackupSettings({ status, onRefresh, onSetup }: { status: AppStat
   }
   async function commit(){const current=epoch.current;await job(async()=>{if(!preview)return;const result=unwrap(await api.commitBackup({sessionId:preview.sessionId,servers:preview.items.filter(i=>i.kind==='server'&&selected.has(i.id)).map(i=>i.id),credentials:preview.items.filter(i=>i.kind==='credential'&&selected.has(i.id)).map(i=>i.id)}));if(current!==epoch.current)return;setMode(null);setPreview(null);setFile(null);setSelected(new Set());setNotice(msg('backup.imported',{servers:result.servers,credentials:result.credentials,skipped:result.skipped}));await onRefresh();if(current===epoch.current)setCounts(unwrap(await api.backupSummary()))})}
   const rows=preview?.items.slice(page*20,page*20+20)??[],pages=Math.max(1,Math.ceil((preview?.items.length??0)/20))
-  return <section><header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('backup.title')}</h1></div></header>
+  if (!unlocked) return <LockedPage label={msg('aiSettings.settings')} title={msg('backup.title')} status={status} onRefresh={onRefresh} onSetup={onSetup}/>
+  return <section><PageHeader label={msg('aiSettings.settings')} title={msg('backup.title')}/>
     {!unlocked?<UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup}/>:<>
-      {notice&&<p className="credential-notice" role="status">{notice}</p>}{error&&!mode&&<p className="drawer-error" role="alert">{error}</p>}
+      {notice&&<Toast message={notice} onDismiss={()=>setNotice('')}/>}{error&&!mode&&<Toast message={error} error onDismiss={()=>setError('')}/>}
       <div className="backup-overview"><Archive size={23}/><div><h2>{msg('backup.assets')}</h2><p>{msg('backup.includes')}</p>{counts&&<span>{msg('backup.counts',{servers:counts.servers,credentials:counts.credentials,applications:counts.applications})}</span>}</div></div>
       <div className="backup-cards"><article className="security-card"><Download size={23}/><h2>{msg('backup.export')}</h2><p>{msg('backup.exportDescription')}</p><button className="credential-primary" disabled={busy||!counts} onClick={()=>{setMode('export');setNotice('');setError('')}}>{msg('backup.export')}</button></article>
       <article className="security-card"><Upload size={23}/><h2>{msg('backup.import')}</h2><p>{msg('backup.importDescription')}</p><button className="credential-secondary" disabled={busy} onClick={()=>void choose()}>{msg('backup.choose')}</button></article></div>

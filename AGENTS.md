@@ -41,6 +41,10 @@ Personal installed desktop app. Current release targets macOS Intel and Apple Si
 
 User preference (2026-10-25): develop and validate locally, maintain local plans/status, and batch GitHub pushes, PRs and merges for larger releases. Do not push every feature or trigger Actions for routine iterations. Track pending GitHub Issue/PR updates locally until the release batch is requested.
 
+## Local application bundles
+
+Keep only the active runnable bundle at `release/mac-arm64/HostHarbor.app` during local handoffs. Archive rollback and test bundles as verified ZIP files under `work/app-archives.noindex/`; remove their expanded `.app` directories after verification and unregister obsolete Launch Services entries. Do not leave `HostHarbor-before-*.app` backups or staged app copies in development folders, because macOS indexes them as separate applications. Never reset the global Launch Services or application launcher database to clean project duplicates.
+
 ## Useful commands
 
 ```sh

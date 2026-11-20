@@ -1,3 +1,5 @@
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { msg, getLocale, errorText } from '../../../shared/i18n'
 import { TransferDetails } from './TransferDetails'
 import { QueryChecks } from './QueryChecks'
@@ -20,8 +22,9 @@ export function HistoryPage({ status, onRefresh, onSetup }: { status: AppStatus 
   const [selected, setSelected] = useState<Operation | null>(null), [reload, setReload] = useState(0)
   const unlocked = status?.vault === 'unlocked'
   useEffect(() => { setSelected(null) }, [status?.lockRevision, unlocked])
+  if (!unlocked) return <LockedPage label={msg('historyPage.localActivityRecords')} title={msg('historyPage.operationLogs')} status={status} onRefresh={onRefresh} onSetup={onSetup}/>
   return <section className={unlocked ? 'history-workspace' : undefined}>
-    <header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('historyPage.localActivityRecords')}</span><h1>{msg('historyPage.operationLogs')}</h1></div></header>
+    <PageHeader label={msg('historyPage.localActivityRecords')} title={msg('historyPage.operationLogs')}/>
     {!unlocked ? <UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup} /> : <>
       <OperationList key={status?.lockRevision} history revision={reload} onSelect={setSelected} />
       {selected && <HistoryDetail key={selected.id} operation={selected} onClose={() => setSelected(null)} onChanged={() => { setSelected(null); setReload(n => n + 1) }} />}

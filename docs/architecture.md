@@ -129,7 +129,7 @@ SQLite user_version=2：servers.credentialId 可为 NULL，服务器可在没有
 
 ## ADR-011：连接路径与内部转发
 
-已实现直连、单层 SSH 跳板和 SOCKS5。服务器保存 route；跳板引用另一台已绑定凭证的直连服务器；SOCKS5 保存代理地址、端口，以及可选的代理用户名和密码凭证引用。秘密继续由 Core 解密，不进入服务器配置、MCP 或 renderer 长期状态。SQLite v3 添加 route JSON，旧数据默认直连，损坏或未知 route 失败关闭。
+已实现直连、单层 SSH 跳板和 SOCKS5。服务器保存 route；跳板引用另一台已绑定凭证的直连服务器；SOCKS5 引用集中管理的加密代理目录，route 保留 proxyId 与配置快照；修改共享代理时在同一事务内更新关联 route 和服务器 revision，并使未完成操作及指纹挑战失效。可选代理用户名和密码凭证引用由目录统一维护。秘密继续由 Core 解密，不进入服务器配置、MCP 或 renderer 长期状态。SQLite v3 添加 route JSON，旧数据默认直连，损坏或未知 route 失败关闭。
 
 SSH 跳板使用 [ssh2 forwardOut](https://github.com/mscdex/ssh2) 为已保存的固定目标建立 direct-tcpip 流，再在流内进行独立 SSH 握手。跳板和目标分别认证、分别验证原有 KnownHost；未知指纹以 jump/target 角色和对应名称返回，每次人工确认都关闭本次连接，再显式继续。禁止自引用、嵌套跳板、引用不存在的服务器或未绑定凭证的跳板；被使用的跳板不可删除、解绑或改成代理路径。没有本地公开监听、Agent forwarding、远端 Shell 或通用转发接口。
 
@@ -463,3 +463,65 @@ PolicyService保留全局默认策略，新增以approval-channel:v1:<profileId>
 加密全局ApprovalPolicy新增可选forceApproval/denyExecution。旧mode=paused仍按全局拒绝处理；界面关闭该旧状态时在同一次保存中切回保守all-approval初值。deny优先，force只将原allow转换为approval，不能将渠道deny变为可审批放行。SFTP描述和实际决定同时强制上传/下载审批；目录元数据不生成审批任务，deny仍阻止浏览。全局force时不启动AI审批建议。
 
 开关变更与全局策略保存同事务递增原控制epoch，changed事件覆盖全部接入未派发请求，关闭开关不复用旧审批。快照scope增加forceApproval用于派发前比较；渠道接口拒绝传入全局开关，避免误将全局配置写入渠道。Schema15及旧策略严格字段校验阻止旧版忽略限制，回退需匹配数据库。无新增MCP管理能力。
+
+### 桌面私钥文件路径导入
+
+`credentials:import-key-path` 仅面向受信桌面主框架，Main 在文件读取前后检查 Core 的桌面解锁状态与锁修订。用户显式输入绝对路径或 `~/` 路径；限定普通文件和 256 KiB，验证为私钥后送回当前凭证表单，由用户保存。Renderer 不使用文件系统 API，内容不进入持久状态库；不是 MCP 通用本机文件读取接口，导入后的凭证不随来源文件变更。
+
+### 服务器标签分类
+
+`ServerTagsService` 使用现有 metadata 表中的 `server-tags:v1` 保存带修订号的加密目录与 serverId→tagId 关联，无数据库 schema 变更。桌面固定 get/save IPC 要求桌面解锁，Core 验证唯一名称/ID、颜色、数量、服务器和关联完整性，以修订号防止覆盖并发修改。标签修改不触发连接/审批配置失效；读取时排除已删除服务器的旧关联。颜色严格限制为六位 hex，显示为普通文本和限定 CSS 颜色，不渲染 HTML。
+
+备份包含可选 serverTags 字段并计入预览快照，导入事务按新服务器 ID 重映射，按不区分大小写名称合并目录、保留本机颜色，不修改重复服务器的关联。目录超限使恢复事务回滚。MCP list_servers 返回当前渠道授权服务器的标签名称/颜色，支持标签子串筛选；无 MCP 标签管理权限，标签不是授权边界。
+
+### 独立巡检工作区
+
+桌面新增 `InspectionsPage`，与服务器菜单相邻，服务器机器人弹窗仅保留档案。新增时选择服务器，未保存的清单以默认模板直接进入编辑，保留人工 Markdown、应用关联、AI 分析/并排草稿确认和原有保存版本。报告详情抽为共享组件，保留证据与原清单快照，不自动执行或调度巡检。
+
+桌面固定 `inspection:catalog` IPC 通过 Core 的桌面解锁检查提供清单/全局报告的查询、服务器/标签/结果/时间筛选及分页；未向 MCP 增加管理权限。清单目录只包含各服务器当前已保存版本，显示最近报告及其清单版本。报告摘要在 Core 解密并过滤，向 Renderer 只返回当前页摘要；详情仍按 serverId+reportId 读取。既有加密表、版本、历史快照、审批/MCP与备份不变，无 schema 迁移。
+
+### 巡检报告浏览器预览与导出
+
+桌面固定 `inspection:open-dashboard` / `inspection:export-report` IPC 只接受 serverId、reportId（字段 id）与 md/docx/html 格式；Renderer 不提供文件内容、路径或外部 URL。Main 在前后核对桌面解锁和 lockRevision，经 Core 重新读取报告及服务器显示名称，生成静态内容。无新增 MCP 工具，不执行 SSH、不调用 AI，不改变报告 schema/提示词。
+
+浏览器预览使用 userData/inspection-previews 下随机文件名和 0600 文件，通过 shell 打开固定生成的 file URL；在下一次预览时清理超过一天或超出 31 份的旧文件。HTML 为离线单文件，文本转义、CSP 禁止脚本/外部资源，无 Token、凭证及远端执行能力。导出目标仅来自原生保存框，以同目录随机临时文件原子替换；取消及对话框期间锁定不发布文件。导出文档与已经在浏览器打开的内容不会随凭证库锁定撤回。
+
+Markdown、静态 HTML、真实 OOXML .docx 共用报告文本结构，含原结果、操作证据引用与清单快照，不导出原始命令输出。Word 包使用内置 CRC32/ZIP stored 封装与固定 XML 样式，无外部转换器依赖。当前 HTML 仅验证查看/导出流程，资源图表和三块结构化报告规范待后续设计。
+
+### 巡检异常人工处理与清单例外
+
+原始 inspection_reports.detail、requestHash、items.status、证据和清单快照保持不变。加密 metadata 的 `inspection-review:<reportId>` 存储递增 revision 与逐 checkId 忽略原因/时间，仅允许桌面固定 IPC 处理原始 abnormal 项，支持撤销。读取时合并 overlay，计算 effective status（仍有异常→abnormal；否则存在未完成→incomplete；全部忽略且无其他未完成→normal），保留 originalStatus、ignoredCount。列表筛选、详情、摘要计数和重新生成的 HTML/Markdown/Word 使用同一投影；旧导出文件不自动改写。客户端提交不能携带人工忽略信息。删除报告/服务器时同步清理处理记录。
+
+“今后同类情况”显式同意后只发送所选检查标题、发现和用户原因给当前 AI。草稿为单行最多 50 Unicode code points，用户可修改并确认；AI 不明确时要求补充上下文。确认时核对报告处理修订、当前清单修订、服务器修订和上下文，末尾追加普通 Markdown 已确认例外（不新增 ## 检查项），生成清单新版本；可在同一事务忽略本次。任一步失败全部回滚，旧报告快照不变。AI 等待后重新核对锁定/版本/报告存在，不自动保存草稿，无 SSH 执行，也不改变审批或授权。例外是供智能体判断的可编辑说明，不是确定性匹配或执行安全边界。
+
+### 巡检报告结构化资源与离线仪表盘
+
+报告项可选 section（system/application/custom）、subject 和 metrics；旧请求不注入默认字段，既有报告摘要/幂等哈希兼容。CPU 为实测 usagePercent，不将负载均值换算使用率；内存/磁盘为安全整数字节容量，used≤total、total>0。每个指标绑定 observedAt 与同项 operationId，Core 要求同服务器、同接入、当前巡检时间内成功且退出码0的命令操作，并拒绝重复 CPU/内存/挂载点及过量指标。该关联只证明操作来源，不独立验证智能体提取数值的正确性，不改变审批/执行权限。挂载点及对象名称沿用脱敏。
+
+Main 使用固定模板生成 Netdata 风格 SVG 指针仪表、容量条及三类结果卡片，无脚本、无外部资源，CSP 和不可信文本转义保持不变；仅使用本次保存指标，旧报告未分类项归入自定义检查，不从自然语言猜测数值，不编造趋势。磁盘总览展示使用率最高的挂载点，所有挂载点逐行列出；单次快照不表现为实时监控。已忽略项仍展示原始发现，但不计入异常数。Markdown/Word 同步导出资源数值及采样/操作引用。
+
+### 工作区标题与锁定态复用
+
+Renderer 的 PageHeader 统一工作区和设置页的标题字号、行高、标签与操作区；LockedPage 提供所有私有页面共用的整页锁定模板，路由仅传入标题/标签与解锁回调。Main 内容容器在锁定态统一高度/滚动规则，锁组件不依赖各功能页的内容宽度、留白或页签高度。智能体接入的工具目录仍允许锁定时浏览，接入页签与锁定面板保持 aria-controls/tabpanel 关联。没有改变凭证解锁、MCP 后台权限或执行审批逻辑。
+
+### Report background appearance preference
+
+Main stores a strict cosmetic background enum (default/aurora/grid/nebula) in report-style-settings.json using atomic replacement. Fixed desktop report-style:get/save IPC permits no custom URL/CSS/path and is available while locked, like language preferences. Renderer receives only the enum and trusted build-time thumbnails; Core, MCP, report data and execution authorization are unchanged.
+
+DesktopInspectionReports injects the current preference when re-fetching a report for open/export. The fixed HTML renderer embeds a trusted bundled JPEG as a data URI with a dark overlay and allows img-src data: only; external resources and scripts remain prohibited. Content, layouts, metric fields, Markdown and Word are independent of the preference. Existing open/exported files are not rewritten. Printing suppresses the background. Original dark remains the default; all three backgrounds are selectable in General settings.
+
+### Four complete report presentation themes
+
+The existing background enum and preference file remain compatible; preset IDs now select a complete trusted Main-rendered composition as well as artwork. Default keeps the pointer dashboard; aurora uses a side rail and rings; grid uses compact bars and two work columns; nebula uses a report cover, semicircles and paired lower sections. Shared escaped data/card/summary/evidence fragments prevent theme-specific data omissions. No extra metrics, scores, remote sampling, AI output fields, scripts or authorization changes. All themes retain the four anchors, original plan/evidence, ignored-item projection and missing-data semantics.
+
+Theme-specific CSS is isolated in inspection-dashboard-themes.ts with narrow and print overrides. Settings thumbnails are actual locally rendered synthetic fixtures, packaged as trusted static assets, and bilingual descriptions explain each layout. Newly opened/exported HTML uses the current selection; existing files and Markdown/Word remain unchanged.
+
+2026-11-20：共享 SOCKS5 的版本校验、旧配置迁移及备份重映射见 [共享代理](shared-proxies.md)。
+
+
+### 2026-11-20 · 统一操作反馈
+
+Renderer 的 ToastProvider 统一管理短期操作结果。Toast 源组件不产生布局节点，消息通过 React portal 进入手动 popover 顶层；有活动 dialog 时挂载为该 dialog 的后代，避免模态遮挡和不可交互。成功消息 4.5 秒自动关闭，鼠标悬停或键盘聚焦暂停倒计时；错误保留到手动关闭。源页面卸载/加锁移除对应消息，不保存至状态仓库或磁盘。输入校验、调查进度、备份来源说明等持久上下文仍留在所属表单/内容区域。纯文本渲染，沿用双语消息与 dismiss 标签。
+
+
+2026-11-20：服务器标签可选 pinned 字段用于最多 4 个快捷筛选选项卡，旧数据缺省不加入。上限由共享 schema 在 Core 持久化及备份校验处执行；该偏好不影响授权/连接修订，MCP 仍只返回名称与颜色。备份恢复同名优先保留本机偏好，新增标签按剩余容量恢复选项卡；完整标签目录与分配不因快捷名额丢弃。
