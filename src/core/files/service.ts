@@ -1,3 +1,4 @@
+import { policyDecisionBase } from '../policy/service'
 import { filePipeline } from './pipeline'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -50,8 +51,8 @@ export class FileService {
     return { desktopProfileId }
   }
   describe(profileId: string, serverId: string) {
-    const policy = this.operations.policy.get()
-    const downloadRequiresApproval = policy.downloadApprovalRequired?.[policy.mode] ?? true, uploadRequiresApproval = policy.uploadApprovalRequired?.[policy.mode] ?? true
+    const policy = this.operations.policy.effective(profileId)
+    const downloadRequiresApproval = policy.scope?.forceApproval || (policy.downloadApprovalRequired?.[policy.mode] ?? true), uploadRequiresApproval = policy.scope?.forceApproval || (policy.uploadApprovalRequired?.[policy.mode] ?? true)
     return { ...this.access(profileId, serverId), manualTransferApproval: downloadRequiresApproval || uploadRequiresApproval, uploadRequiresApproval, downloadRequiresApproval, downloadsPaused: policy.mode === 'paused', uploadsPaused: policy.mode === 'paused', overwriteSupported: false }
   }
   async start(profileId: string, raw: unknown, guard: () => void = () => {}): Promise<Operation> {
@@ -90,9 +91,9 @@ export class FileService {
   }
   private decision(profileId: string, spec: TransferSpec): PolicyDecision {
     const a = this.access(profileId, spec.request.serverId); this.check(a, spec)
-    const p = this.operations.policy.get(), required = spec.request.direction === 'upload' ? p.uploadApprovalRequired?.[p.mode] : p.downloadApprovalRequired?.[p.mode]
-    const action = p.mode === 'paused' ? 'deny' : required === false ? 'allow' : 'approval'
-    return { revision: p.revision, mode: p.mode, action, matchedRules: [{ id: 'file-settings-v2', name: `服务器文件设置 v${a.revision}`, action }], reason: action === 'deny' ? '已暂停执行' : action === 'approval' ? '确认本次本机路径、远端路径和大小后传输；不覆盖、不执行' : '当前模式已关闭本方向文件审批，按用户授权传输并记录；保留固定上传目录、大小限制、不覆盖、不执行' }
+    const p = this.operations.policy.effective(profileId), required = spec.request.direction === 'upload' ? p.uploadApprovalRequired?.[p.mode] : p.downloadApprovalRequired?.[p.mode]
+    const action = p.mode === 'paused' ? 'deny' : !p.scope?.forceApproval && required === false ? 'allow' : 'approval'
+    return { ...policyDecisionBase(p), action, matchedRules: [{ id: 'file-settings-v2', name: `服务器文件设置 v${a.revision}`, action }], reason: action === 'deny' ? '已暂停执行' : action === 'approval' ? '确认本次本机路径、远端路径和大小后传输；不覆盖、不执行' : '当前模式已关闭本方向文件审批，按用户授权传输并记录；保留固定上传目录、大小限制、不覆盖、不执行' }
   }
   private async localPath(path: string): Promise<string> {
     if (!isAbsolute(path)) throw new AppError('FILE_ACCESS')

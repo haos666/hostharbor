@@ -10,13 +10,14 @@ import { OperationService } from '../src/core/operations/service'
 import { LocalMcpServer } from '../src/core/mcp/server'
 import { sshFixture } from './helpers/routes'
 import type { Operation } from '../src/shared/contracts'
+const syntheticLargeOutput = 'synthetic-output-line\n'.repeat(1600)
 
 describe('authenticated loopback MCP transport', () => {
   let servers: ServerService, operations: OperationService, mcp: LocalMcpServer
   let remote: Awaited<ReturnType<typeof sshFixture>>, access: ReturnType<OperationService['createProfile']>, second: ReturnType<OperationService['createProfile']>
   const clients: Client[] = []; let targetId: string, endpoint: string
   beforeAll(async () => {
-    remote = await sshFixture({ exec: (command, stream) => { const marker = command.match(/[a-f0-9]{48}/)![0]; stream.write(`${marker}\0/fixture\0synthetic result\n`); setTimeout(() => { stream.exit(0); stream.end() }, 10) } })
+    remote = await sshFixture({ exec: (command, stream) => { const marker = command.match(/[a-f0-9]{48}/)![0]; stream.write(`${marker}\0/fixture\0${command.includes('synthetic-pagination-large') ? syntheticLargeOutput : 'synthetic result\n'}`); setTimeout(() => { stream.exit(0); stream.end() }, 10) } })
     servers = new ServerService(new Store(':memory:')); servers.unlock(randomBytes(32))
     const credential = servers.saveCredential({ name: 'fixture', kind: 'password', password: 'target-secret' })
     const server = servers.saveServer({ name: 'fixture', host: '127.0.0.1', port: remote.port, username: 'target-user', credentialId: credential.id }); targetId = server.id
@@ -67,6 +68,28 @@ describe('authenticated loopback MCP transport', () => {
     expect((await fetch(endpoint.replace('/mcp', '/credentials'), { method: 'POST', headers })).status).toBe(404)
     expect((await fetch(endpoint, { headers })).status).toBe(405)
     expect((await fetch(endpoint, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: ' '.repeat(65537) })).status).toBe(413)
+  })
+  it('pages completed synthetic SSH output over MCP using exact resume arguments without another execution', async () => {
+    const client=await connect(access.token), sessions=remote.sessions
+    const tools=(await client.listTools()).tools
+    expect(tools.find(t=>t.name==='read_output')!.description).toContain('PER CALL, not cumulatively')
+    const op=unpack(await client.callTool({name:'start_command',arguments:{serverId:targetId,requestKey:'synthetic-pagination',command:'synthetic-pagination-large',cwd:'/fixture'}})) as Operation
+    operations.decide({id:op.id,approve:true})
+    await vi.waitFor(()=>expect(operations.get(op.id).state).toBe('succeeded'))
+    let arguments_: {id:string;cursor:number}={id:op.id,cursor:0},text='',pages=0
+    const seen:number[]=[]
+    for(;;){
+      const page=unpack(await client.callTool({name:'read_output',arguments:arguments_}));pages++
+      expect(page.chunks.length).toBeLessThanOrEqual(8)
+      seen.push(...page.chunks.map((c:{seq:number})=>c.seq));text+=page.chunks.map((c:{text:string})=>c.text).join('')
+      if(!page.hasMore){expect(page).toMatchObject({outputComplete:true,agentGuidance:{nextAction:'stop',resume:null}});break}
+      expect(page.agentGuidance.resume.tool).toBe('read_output');arguments_=page.agentGuidance.resume.arguments
+      expect(arguments_.id).toBe(op.id);expect(pages).toBeLessThan(10)
+    }
+    expect(pages).toBeGreaterThan(1);expect(text).toBe(syntheticLargeOutput)
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(seen).toEqual(Array.from({length:seen.length},(_,i)=>i))
+    expect(remote.sessions).toBe(sessions+1)
   })
   it('returns immediate approval guidance, hands off aged waits, and resumes only the original operation', async () => {
     const profile = operations.createProfile({ name: 'synthetic wait fixture', serverIds: [targetId], mode: 'policy', expiresAt: null })

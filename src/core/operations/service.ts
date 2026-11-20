@@ -1,7 +1,8 @@
+import { ServerTagsService } from '../servers/tags'
 import { TransferDeadline } from '../files/deadlines'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { RecordingStore } from '../recording/storage'
-import { PolicyService, evaluatePolicy } from '../policy/service'
+import { PolicyService, evaluatePolicy, type PolicyChange } from '../policy/service'
 import { SecretFilter } from './redaction'
 import { StringDecoder } from 'node:string_decoder'
 import { z } from 'zod'
@@ -60,7 +61,7 @@ export class OperationService {
     } finally { values.length = 0 }
   }
   private commandDecision(input: CommandInput, profileId: string, context?: Operation['context']): PolicyDecision {
-    const decision = this.protectQuerySecrets(evaluatePolicy(this.policy.get(), { ...input, profileId, verifiedLogQuery: this.verifiedLog(input, context), queryScope: this.diagnosticScope(input.serverId, input.cwd) }), input)
+    const decision = this.protectQuerySecrets(evaluatePolicy(this.policy.effective(profileId), { ...input, profileId, verifiedLogQuery: this.verifiedLog(input, context), queryScope: this.diagnosticScope(input.serverId, input.cwd) }), input)
     if (!input.elevation || decision.action === 'deny') return decision
     if (decision.mode === 'permissive') return { ...decision, reason: `${decision.reason}；以绑定凭证提权执行，遵循同一审批判断` }
     return { ...decision, action: 'approval', queryPlan: undefined, queryAnalysis: undefined, reason: '以 root 提权执行整条命令，需要人工批准' }
@@ -69,13 +70,14 @@ export class OperationService {
   private active = new Map<string, { cancel: (code: ErrorCode) => void; profileId: string }>()
   readonly recordings: RecordingStore
   readonly policy: PolicyService
-  private readonly policyChanged = () => {
-    this.abortReviews()
-    for (const browse of this.browsing.values()) browse.cancel('POLICY_CHANGED')
+  private readonly policyChanged = (change:PolicyChange) => {
+    const affected=(profileId:string)=>change.profileId?profileId===change.profileId:!!change.globalPauseChanged||!this.policy.hasOverride(profileId)
     try {
-      this.db.prepare("UPDATE operations SET state='interrupted',errorCode='POLICY_CHANGED',updatedAt=? WHERE intentAt IS NULL AND state IN ('awaiting_approval','queued','connecting')").run(Date.now())
-      for (const [id, active] of this.active) if (this.row(id).intentAt === null) active.cancel('POLICY_CHANGED')
-    } catch { this.halted = true; throw new AppError('STORAGE_FAILED') }
+      for(const [id,controller] of this.reviews)if(affected(this.row(id).profileId)){controller.abort();this.reviews.delete(id)}
+      for(const browse of this.browsing.values())if(affected(browse.profileId))browse.cancel('POLICY_CHANGED')
+      for(const row of this.db.prepare("SELECT id,profileId FROM operations WHERE intentAt IS NULL AND state IN ('awaiting_approval','queued','connecting')").all())if(affected(String(row.profileId)))this.db.prepare("UPDATE operations SET state='interrupted',errorCode='POLICY_CHANGED',updatedAt=? WHERE id=?").run(Date.now(),row.id)
+      for(const [id,active] of this.active)if(affected(active.profileId)&&this.row(id).intentAt===null)active.cancel('POLICY_CHANGED')
+    }catch{this.halted=true;throw new AppError('STORAGE_FAILED')}
   }
   private halted = false
   private readonly invalidate = (code: ErrorCode) => {
@@ -104,7 +106,7 @@ export class OperationService {
   }
   listProfiles(includeDesktop = false): AccessProfile[] {
     this.servers.assertUnlocked()
-    return this.db.prepare('SELECT id,name,serverIds,mode,expiresAt,revokedAt,deletedAt,createdAt,revision,(tokenSecret IS NOT NULL) AS hasSavedToken FROM profiles WHERE deletedAt IS NULL ORDER BY createdAt DESC,id').all().filter(row => includeDesktop || this.db.prepare('SELECT source FROM profiles WHERE id=?').get(row.id as string)?.source === 'mcp').map((row) => ({ ...row, hasSavedToken: !!row.hasSavedToken, serverIds: JSON.parse(row.serverIds as string), revokedAt: row.revokedAt ?? undefined, deletedAt: row.deletedAt ?? undefined })) as unknown as AccessProfile[]
+    return this.db.prepare('SELECT id,name,serverIds,mode,expiresAt,revokedAt,deletedAt,createdAt,revision,(tokenSecret IS NOT NULL) AS hasSavedToken FROM profiles WHERE deletedAt IS NULL ORDER BY createdAt DESC,id').all().filter(row => includeDesktop || this.db.prepare('SELECT source FROM profiles WHERE id=?').get(row.id as string)?.source === 'mcp').map((row) => ({ ...row, approvalSource:this.policy.hasOverride(String(row.id))?'channel':'default', hasSavedToken: !!row.hasSavedToken, serverIds: JSON.parse(row.serverIds as string), revokedAt: row.revokedAt ?? undefined, deletedAt: row.deletedAt ?? undefined })) as unknown as AccessProfile[]
   }
   queryProfiles(raw: unknown): ProfilePage {
     this.servers.assertUnlocked()
@@ -115,7 +117,7 @@ export class OperationService {
     const total = Number(this.db.prepare(`SELECT count(*) AS n FROM profiles p WHERE ${where}`).get(query, query, query)!.n)
     const offset = Math.min(input.offset, Math.max(0, Math.ceil(total / input.pageSize) - 1) * input.pageSize)
     const rows = this.db.prepare(`SELECT p.id,p.name,p.serverIds,p.mode,p.expiresAt,p.revokedAt,p.deletedAt,p.createdAt,p.revision,(p.tokenSecret IS NOT NULL) AS hasSavedToken FROM profiles p WHERE ${where} ORDER BY p.createdAt DESC,p.id LIMIT ? OFFSET ?`).all(query, query, query, input.pageSize, offset)
-    return { profiles: rows.map(row => ({ ...row, serverIds: JSON.parse(row.serverIds as string), hasSavedToken: !!row.hasSavedToken, revokedAt: row.revokedAt ?? undefined, deletedAt: row.deletedAt ?? undefined })) as unknown as AccessProfile[], total, offset, pageSize: input.pageSize }
+    return { profiles: rows.map(row => ({ ...row, approvalSource:this.policy.hasOverride(String(row.id))?'channel':'default', serverIds: JSON.parse(row.serverIds as string), hasSavedToken: !!row.hasSavedToken, revokedAt: row.revokedAt ?? undefined, deletedAt: row.deletedAt ?? undefined })) as unknown as AccessProfile[], total, offset, pageSize: input.pageSize }
   }
   deleteProfile(raw: unknown): void {
     this.servers.assertUnlocked()
@@ -251,7 +253,8 @@ export class OperationService {
   }
   listServers(profileId: string) {
     const profile = this.profile(profileId)
-    return this.servers.listServers().filter((s) => profile.serverIds.includes(s.id)).map(({ id, name, host, port, username, elevation }) => ({ id, name, host, port, username, sudoConfigured: elevation?.type === 'sudo' }))
+    const labels=new ServerTagsService(this.servers).get()
+    return this.servers.listServers().filter((s) => profile.serverIds.includes(s.id)).map(({ id, name, host, port, username, elevation }) => ({ id, name, host, port, username, tags:labels.tags.filter(t=>labels.assignments[id]?.includes(t.id)).map(({name,color})=>({name,color})), sudoConfigured: elevation?.type === 'sudo' }))
   }
   snapshot(serverId: string): { snapshot: string; routeServers: ServerRecord[]; target: ServerRecord; dependencies: Detail['dependencies'] } {
     const server = this.servers.store.getServer(serverId)
@@ -274,8 +277,8 @@ export class OperationService {
     return { snapshot: createHash('sha256').update(JSON.stringify({ list, dependencies, hosts })).digest('hex'), routeServers: list, target: server, dependencies }
   }
   async browseFiles(profileId: string, input: FileBrowseInput): Promise<FileBrowseResult> {
-    const profile = this.profile(profileId, input.serverId), snapshot = this.snapshot(input.serverId).snapshot, policyRevision = this.policy.get().revision
-    if (this.policy.get().mode === 'paused') throw new AppError('FILE_BROWSE_PAUSED')
+    const profile = this.profile(profileId, input.serverId), snapshot = this.snapshot(input.serverId).snapshot, policyRevision = JSON.stringify(this.policy.effective(profileId))
+    if (this.policy.effective(profileId).mode === 'paused') throw new AppError('FILE_BROWSE_PAUSED')
     if (!this.fileAdapter || this.active.size + this.browsing.size >= 4) throw new AppError('OPERATION_LIMIT')
     const id = randomUUID()
     let timer: ReturnType<typeof setTimeout> | undefined, expiry: ReturnType<typeof setTimeout> | undefined
@@ -283,7 +286,7 @@ export class OperationService {
       const current = this.profile(profileId, input.serverId)
       if (current.revision !== profile.revision) throw new AppError('ACCESS_DENIED')
       if (this.snapshot(input.serverId).snapshot !== snapshot) throw new AppError('CONFIG_CHANGED')
-      if (this.policy.get().revision !== policyRevision) throw new AppError('POLICY_CHANGED')
+      if (JSON.stringify(this.policy.effective(profileId)) !== policyRevision) throw new AppError('POLICY_CHANGED')
     }
     this.browsing.set(id, { profileId, cancel: () => {} })
     try {
@@ -313,9 +316,9 @@ export class OperationService {
     if (input.elevation) { const password = this.servers.elevationPassword(input.serverId); password?.fill(0) }
     this.recordings.maintain()
     if (this.halted || this.active.size + this.browsing.size >= 4 || Number(this.db.prepare('SELECT COUNT(*) AS count FROM operations').get()!.count) >= 10000 || Number(this.db.prepare("SELECT COUNT(*) AS count FROM operations WHERE state='awaiting_approval'").get()!.count) >= 20) throw new AppError('OPERATION_LIMIT')
-    const policy = this.policy.get()
+    const policy = this.policy.effective(profileId)
     const decision = transfer ? this.fileAdapter!.decision(profileId, transfer) : this.commandDecision(input, profileId, context)
-    const review = !transfer && !input.elevation && policy.mode === 'assisted' && policy.aiAssist && decision.action === 'approval' && !decision.matchedRules.length
+    const review = !policy.scope?.forceApproval && !transfer && !input.elevation && policy.mode === 'assisted' && policy.aiAssist && decision.action === 'approval' && !decision.matchedRules.length
     if (review) decision.aiReview = { status: 'pending', reason: 'AI 正在分析；你也可以直接人工决定' }
     const id = randomUUID(), now = Date.now(), state = decision.action === 'deny' ? 'denied' : decision.action === 'approval' ? 'awaiting_approval' : 'queued'
     const detail: Detail = { context, transfer, profileRevision: profile.revision, decision, input, ...this.snapshot(input.serverId), profileName: profile.name, serverName: this.servers.store.getServer(input.serverId)!.name }
@@ -422,6 +425,10 @@ export class OperationService {
     // Reserve concurrency synchronously; no queue race between requests in the same tick.
     this.active.set(id, { profileId: this.row(id).profileId, cancel: (code) => this.state(id, 'interrupted', code) })
     setImmediate(() => { void this.run(id).catch(() => { this.halted = true }).finally(() => this.active.delete(id)) })
+  }
+  assertMaintenanceIdle(): void {
+    this.servers.assertMaintenanceIdle()
+    if (this.active.size || this.browsing.size || this.db.prepare("SELECT id FROM operations WHERE state IN ('awaiting_approval','queued','connecting','dispatching','running') LIMIT 1").get()) throw new AppError('STORAGE_BUSY')
   }
   private async run(id: string): Promise<void> {
     let sent = false, transferPublicationAttempted: boolean | undefined
@@ -568,11 +575,22 @@ export class OperationService {
     this.recordings.sweepIfDue()
     const operation = this.get(id, owner)
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new AppError('INVALID_INPUT')
-    const rows = this.db.prepare('SELECT * FROM operation_output WHERE operationId=? AND seq>=? ORDER BY seq LIMIT 8').all(id, cursor)
-    const chunks = rows.map((row) => ({ seq: Number(row.seq), stream: row.stream as 'stdout' | 'stderr', elapsedMs: Number(row.elapsedMs), text: this.recordings.decode(`${id}:output:${row.seq}:${row.stream}`, row.data as Uint8Array, String(row.encoding)) }))
-    const guidance = operation.agentGuidance
-    return { chunks, nextCursor: chunks.length ? chunks[chunks.length - 1].seq + 1 : cursor, state: operation.state, replayClearedAt: operation.replayClearedAt,
-      agentGuidance: !chunks.length && guidance?.nextAction === 'read_output' ? { ...guidance, nextAction: 'stop', message: '原操作已结束，当前游标没有更多保留输出。停止读取并分析已有结果；输出可能已清理，不要重新执行来补录。' } : guidance }
+    // One look-ahead row determines whether another page exists; never decode it
+    // or return more than eight chunks. This is a per-response limit.
+    const rows = this.db.prepare('SELECT * FROM operation_output WHERE operationId=? AND seq>=? ORDER BY seq LIMIT 9').all(id, cursor)
+    const cleared = operation.replayClearedAt != null
+    const chunks = cleared ? [] : rows.slice(0, 8).map((row) => ({ seq: Number(row.seq), stream: row.stream as 'stdout' | 'stderr', elapsedMs: Number(row.elapsedMs), text: this.recordings.decode(`${id}:output:${row.seq}:${row.stream}`, row.data as Uint8Array, String(row.encoding)) }))
+    const nextCursor = chunks.length ? chunks[chunks.length - 1].seq + 1 : cursor
+    const hasMore = !cleared && rows.length > 8
+    // This describes exhaustion of local retained output, never remote-process
+    // termination or proof that recording captured every byte.
+    const outputComplete = !cleared && !hasMore && terminal.has(operation.state) && !this.active.has(id)
+    let guidance = operation.agentGuidance!
+    if (cleared) guidance = { ...guidance, nextAction: 'stop', pollAfterMs: null, resume: null, message: '此操作的录制输出已清理，无法继续读取；这不表示原输出为空。停止读取，不要重新执行来补录。' }
+    else if (hasMore && operation.state !== 'awaiting_approval') guidance = { ...guidance, nextAction: 'read_output', pollAfterMs: null, resume: { tool: 'read_output', arguments: { id, cursor: nextCursor } }, message: '当前页之后还有已保留输出。每次调用最多八块，不是整个操作累计八块；使用 nextCursor 继续读取同一操作，不重新执行命令。执行结果不确定时仍须保留不确定性；客户端明确拒绝调用时停止，不通过重复请求绕过。' }
+    else if (outputComplete) guidance = { ...guidance, nextAction: guidance.nextAction === 'inspect' ? 'inspect' : 'stop', pollAfterMs: null, resume: null, message: '当前游标之后的本地保留输出已读完，停止分页并结合退出状态分析。此标记不保证录制完整，也不证明未知远端进程已停止；不要重新执行来补录。' }
+    else if (operation.state !== 'awaiting_approval' && !hasMore && guidance.nextAction !== 'inspect' && guidance.nextAction !== 'stop') guidance = { ...guidance, nextAction: 'poll', pollAfterMs: 2000, resume: { tool: 'get_operation', arguments: { id } }, message: '当前没有更多已保存的输出，但本地采集尚未结束。按 pollAfterMs 查询原操作状态，之后从 nextCursor 续读；不要连续空页轮询或重新执行命令。' }
+    return { chunks, nextCursor, hasMore, outputComplete, outputAvailability: cleared ? 'cleared' : 'retained', state: operation.state, replayClearedAt: operation.replayClearedAt, agentGuidance: guidance }
   }
   history(raw: unknown) {
     this.servers.assertUnlocked(); this.expirePending(); this.recordings.maintain()

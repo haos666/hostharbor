@@ -3,20 +3,25 @@
   <img src="resources/branding/lockup-dark.svg" alt="HostHarbor" width="420">
 </picture>
 
-**Your servers. Your credentials. Controlled access for your AI agents.**
+**A local approval and monitoring layer between AI agents and your servers.**
 
 [简体中文](README.zh-CN.md) · [Downloads](https://github.com/haos666/hostharbor/releases) · [MCP setup](docs/mcp.md) · [Security](SECURITY.md)
 
-HostHarbor is a local desktop workspace that connects AI agents to your SSH servers through MCP. Keep reusable credentials in the app, grant agents access to specific servers, decide which operations need approval, and inspect the results in one place.
+HostHarbor is a local desktop workspace that connects AI agents to your SSH servers through MCP. Keep SSH credentials on your computer, give each agent a scoped MCP connection, review execution and file transfers, and turn routine inspections into versioned reports and offline dashboards. Built for personal server management.
 
 ## Built for everyday server work
 
-- **Manage access locally.** Save SSH passwords or private keys, pin host fingerprints, and connect directly, through an SSH jump host, or through SOCKS5. Bind a separate sudo credential when needed.
-- **Give each agent its own access.** Create scoped, expiring or permanent MCP profiles with independent tokens. Edit grants or revoke an access profile without handing the agent your SSH password or private key.
-- **Choose your approval workflow.** Confirm every command, use assisted diagnostics, explicitly allow routine maintenance in permissive mode, or pause execution. Upload and download approvals are configured independently for each mode.
+- **Manage access locally.** Save SSH passwords or private keys, pin host fingerprints, and connect directly, through an SSH jump host, or through SOCKS5. Choose a saved shared SOCKS5 proxy and update it once for all linked servers. Bind a separate sudo credential when needed; import a private key by file, pasted content or path, including hidden directories.
+- **Give each agent its own access.** Create scoped, expiring or permanent MCP profiles with independent tokens. Search servers and select matching results in bulk. Edit grants or revoke an access profile without handing the agent your SSH password or private key.
+- **Choose approval per access.** Configure command modes, risk rules, AI advice and upload/download approval separately for each agent. Two global switches can require approval everywhere or deny new execution.
 - **See what happened.** Use the approval center for pending/running operations and searchable history for finished operations. Replay recorded text output, with configurable retention and local storage limits.
 - **Transfer files without another tool.** Browse remote metadata and transfer single files over SFTP. Uploads use a fixed server directory and configurable size limits, with phase progress, separate timeout controls, and optional full readback verification.
 - **Give agents useful server context.** Optional AI investigations create structured, editable server and application dossiers. MCP tools can find applications and query maintained log entries instead of rediscovering deployment paths every time.
+- **Back up your assets.** Export password-encrypted `.hhbackup` files, preview conflicts and restore selected assets without overwriting existing data. [Backup guide](docs/backup.md).
+- **Organize your servers.** Create colored tags, assign multiple tags per server, and pin up to four quick filters alongside the full tag dropdown and search. [Tags](docs/server-tags.md) · [Shared proxies](docs/shared-proxies.md).
+- **Maintain repeatable inspections.** A dedicated, report-first workspace keeps editable Markdown checklists, optional AI analysis and versioned agent reports together. Start with a template or write your own checks; scheduling stays with your external agent. [Inspection guide](docs/inspections.md).
+- **Read, visualize and export reports.** Read Markdown inside the app, open an offline HTML dashboard in your browser, or export Markdown, Word and HTML. Reports can show sampled CPU, memory and disk metrics, followed by application and custom checks. Four complete themes change charts, layout and background.
+- **Review exceptions.** Ignore or restore a finding in the current report and recalculate its result. For future runs, review an AI-drafted note of up to 50 characters before appending it to the checklist; nothing silently changes the plan.
 - **Use your preferred language.** Follow the system language, or choose Simplified Chinese or English. Settings are grouped into General, Security, and Data & integrations.
 
 ![Server workspace using synthetic data](docs/images/servers.png)
@@ -42,7 +47,7 @@ Built-in server investigations and diagnostic probes currently target Linux serv
 2. Add a credential and a server. Bind the credential, test the connection, and verify the displayed host fingerprint independently before trusting it.
 3. In **Agent access**, create an access profile for the intended servers and copy its installation configuration.
 4. Enable the local MCP service and install that configuration in your MCP client. It contains a bearer token: treat it as a credential.
-5. Choose an approval mode in Settings. Pending operations appear in **Approvals**, and finished operations appear in **Operation logs**.
+5. Configure the access profile’s command and file approval policy. Use Settings for the global require-approval and deny-execution switches. Pending operations appear in **Approvals**, and finished operations appear in **Operation logs**.
 
 HostHarbor uses authenticated **Streamable HTTP on loopback**. The app and MCP client run on the same computer. Your normal VPN connectivity still applies. See [MCP setup](docs/mcp.md), [SSH routing](docs/ssh-routing.md), and the in-app tool catalog for details.
 
@@ -58,7 +63,15 @@ AI is optional. Configure an OpenAI-compatible or Anthropic-compatible endpoint,
 
 Approval rules and AI advice do not make arbitrary shell commands safe or read-only. Permissive mode is an explicit choice to allow routine operations by default. Remote commands inherit the SSH account's permissions. Disconnecting SSH does not prove that a remote process stopped; uncertain outcomes are not automatically retried.
 
-Local activity records are not tamper-proof enterprise audit logs. The vault does not protect against every compromised-OS or same-user attack. Portable vault export, automatic updates, resumable transfers and recursive directory synchronization are not included. Read [SECURITY.md](SECURITY.md) before connecting important assets.
+Local activity records are not tamper-proof enterprise audit logs. The vault does not protect against every compromised-OS or same-user attack. Automatic updates, resumable transfers and recursive directory synchronization are not included. Read [SECURITY.md](SECURITY.md) before connecting important assets.
+
+## v0.3.0 update
+
+This update brings the pending backup and per-access approval work together with standalone inspections, structured dashboards and report review, shared proxies, colored tags and a more consistent desktop interface. See the [bilingual release and upgrade notes](docs/releases/v0.3.0.md) and [changelog](CHANGELOG.md).
+
+![Offline inspection theme preview using synthetic data](resources/report-previews/aurora-en.jpg)
+
+The download table above identifies the published **v0.1.0** installers. **v0.3.0 source availability does not mean its installers have been published**; use the Releases page to check actual downloads. Current source uses schema15: preserve a pre-upgrade app-data copy for rollback. Existing reports without metrics remain readable and show missing measurements as unavailable. Reconnect MCP clients to refresh their tool schema. Windows distribution remains deferred.
 
 ## Build and contribute
 

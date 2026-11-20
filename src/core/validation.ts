@@ -9,7 +9,7 @@ const port = z.number().int().min(1).max(65535)
 export const routeSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('direct') }).strict(),
   z.object({ type: z.literal('ssh-jump'), serverId: id }).strict(),
-  z.object({ type: z.literal('socks5'), host, port, authentication: z.discriminatedUnion('type', [
+  z.object({ type: z.literal('socks5'), proxyId: id.optional(), host, port, authentication: z.discriminatedUnion('type', [
     z.object({ type: z.literal('none') }).strict(),
     z.object({ type: z.literal('password'), username: z.string().min(1).refine((value) => Buffer.byteLength(value) <= 255), credentialId: id }).strict(),
   ]) }).strict(),
@@ -36,3 +36,6 @@ export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   if (!result.success) throw new AppError('INVALID_INPUT')
   return result.data
 }
+
+export const proxySchema = z.object({ id: id.optional(), revision: z.number().int().positive().optional(), name: label, route: routeSchema.options[2].omit({proxyId: true}) }).strict()
+export const proxyCatalogSchema = z.array(proxySchema.extend({id, revision:z.number().int().positive()})).max(200)

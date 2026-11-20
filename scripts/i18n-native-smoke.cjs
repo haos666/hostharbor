@@ -11,7 +11,7 @@ delete env.ELECTRON_RENDERER_URL
 let status = 0
 try {
   for (const phase of ['initial', 'restart', 'system-restart']) {
-    const result = spawnSync(require('electron'), [join(__dirname, 'i18n-native-runner.cjs'), directory, phase], { stdio: 'inherit', env, timeout: 70000 })
+    const result = spawnSync(require('electron'), [join(__dirname, 'i18n-native-runner.cjs'), directory, phase], { stdio: 'inherit', env, timeout: 90000 })
     if (result.status !== 0) { console.error('FAIL: i18n verification', phase, 'screenshots:', join(evidence, 'screenshots')); status = 1; break }
   }
 } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 }) }

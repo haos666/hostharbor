@@ -1,3 +1,5 @@
+import { Toast } from './Toast'
+import { PageHeader } from './PageHeader'
 import { useEffect, useState } from 'react'
 import { errorText, isLanguagePreference, languages, msg, setLocale, type LanguagePreference } from '../../../shared/i18n'
 
@@ -21,8 +23,8 @@ export function LanguageSettings() {
     } catch { setError('STORAGE_FAILED') }
     finally { setBusy(false) }
   }
-  return <section><header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('language.title')}</h1></div></header>
+  return <section><PageHeader label={msg('aiSettings.settings')} title={msg('language.title')}/>
     <div className="security-card"><label className="security-setting language-setting"><div><h2>{msg('language.title')}</h2><p>{msg('language.interfaceLanguage')}</p></div><select aria-label={msg('language.title')} value={preference} disabled={busy || !loaded} onChange={event => void save(event.target.value)}><option value="system">{msg('language.followSystem')}</option>{Object.entries(languages).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-    {error && <p className="drawer-error" role="alert">{errorText({ code: error })}</p>}
+    {error && <Toast message={errorText({code:error})} error onDismiss={()=>setError('')}/>}
   </section>
 }

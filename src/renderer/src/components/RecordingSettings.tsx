@@ -1,3 +1,6 @@
+import { Toast } from './Toast'
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { msg, errorText } from '../../../shared/i18n'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { AppStatus, RecordingSettings as Settings, RecordingStorage } from '../../../shared/contracts'
@@ -19,8 +22,9 @@ export function RecordingSettings({status,onRefresh,onSetup}:{status:AppStatus|n
     finally{if(current===epoch.current)setBusy(false)}
   }
   function save(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!storage)return;const data=new FormData(e.currentTarget),next={revision:storage.settings.revision,retentionDays:Number(data.get('days')),quotaMiB:Number(data.get('quota'))};setPending(next);setConfirm('save');setError('')}
-  return <section><header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('recordingSettings.logsAndStorage')}</h1></div></header>{!unlocked?<UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup}/>:<>
-    {error&&!confirm&&<p className="drawer-error" role="alert">{error}</p>}{message&&<p className="credential-notice" role="status">{message}</p>}
+  if (!unlocked) return <LockedPage label={msg('aiSettings.settings')} title={msg('recordingSettings.logsAndStorage')} status={status} onRefresh={onRefresh} onSetup={onSetup}/>
+  return <section><PageHeader label={msg('aiSettings.settings')} title={msg('recordingSettings.logsAndStorage')}/>{!unlocked?<UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup}/>:<>
+    {error&&!confirm&&<Toast message={error} error onDismiss={()=>setError('')}/>}{message&&<Toast message={message} onDismiss={()=>setMessage('')}/>}
     {!storage?<button className="credential-secondary" disabled={busy} onClick={()=>void job('refresh')}>{msg('aiSettings.reload')}</button>:<>
       <div className="recording-stats"><div><span>{msg('recordingSettings.encryptedReplayStorage')}</span><strong>{bytes(storage.outputStoredBytes)}</strong><small>{storage.outputCount} {msg('recordingSettings.operationsWithReplay')}</small></div><div><span>{msg('recordingSettings.databaseMainFile')}</span><strong>{bytes(storage.databaseBytes)}</strong><small>{msg('recordingSettings.includesSummariesCredentialsAndOtherLocalData')}</small></div><div><span>{msg('recordingSettings.reusableFreePages')}</span><strong>{bytes(storage.reusableBytes)}</strong><small>{storage.operationCount} {msg('recordingSettings.operationSummaries')}</small></div></div>
       <form key={storage.settings.revision} className="recording-settings-form" onSubmit={save}><h2>{msg('recordingSettings.replayRetention')}</h2><p>{msg('recordingSettings.outputIsRetainedFor7DaysByDefault')}</p><div className="recording-inputs"><label>{msg('recordingSettings.retentionDays')}<input name="days" type="number" min={1} max={365} required defaultValue={storage.settings.retentionDays}/><small>{msg('recordingSettings.1365DaysFromTaskCompletion')}</small></label><label>{msg('recordingSettings.replayStorageLimitMib')}<input name="quota" type="number" min={64} max={4096} required defaultValue={storage.settings.quotaMiB}/><small>{msg('recordingSettings.default500MibEncryptedOutputOnly')}</small></label></div><button className="credential-primary" disabled={busy}>{msg('notificationSettings.saveSettings')}</button></form>

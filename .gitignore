@@ -23,3 +23,6 @@ work/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Portable asset archives contain encrypted credentials.
+*.hhbackup

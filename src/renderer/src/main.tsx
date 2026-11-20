@@ -1,11 +1,15 @@
+import { ToastProvider } from './components/Toast'
+import { ReportStyleSettings } from './components/ReportStyleSettings'
+import { InspectionsPage } from './components/InspectionsPage'
 import { msg, getLocale, setLocale, subscribeLocale } from '../../shared/i18n'
+import { BackupSettings } from './components/BackupSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import harborWordmark from '../../../resources/branding/wordmark-light.svg'
 import harborMark from '../../../resources/branding/mark.svg'
 import { StrictMode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { AppStatus, CredentialSummary, Section, ServerRecord, ApprovalNavigation, ApprovalReminder } from '../../shared/contracts'
-import { Activity, Bot, ScrollText, KeyRound, Server, Settings } from 'lucide-react'
+import { Activity, ClipboardCheck, Bot, ScrollText, KeyRound, Server, Settings } from 'lucide-react'
 import { AiSettings } from './components/AiSettings'
 import { HistoryPage } from './components/HistoryPage'
 import { RecordingSettings } from './components/RecordingSettings'
@@ -22,6 +26,7 @@ import './polish.css'
 const api = window.hostharbor
 const sections: { id: Section; label: string; description: string }[] = [
   { id: 'servers', get label() { return msg('navigation.servers') }, get description() { return msg('main.saveSshConnectionsVerifyHostFingerprintsAndTest') } },
+  { id: 'inspections', get label(){return msg('inspectionModule.title')},get description(){return msg('inspectionModule.workspace')} },
   { id: 'credentials', get label() { return msg('credentialsPage.credentials') }, get description() { return msg('main.manageReusablePasswordsAndPrivateKeysWithoutPlaintext') } },
   { id: 'connections', get label() { return msg('agentWorkspace.agentAccess') }, get description() { return msg('main.localAuthorization') } },
   { id: 'operations', get label() { return msg('agentWorkspace.approvals') }, get description() { return msg('main.commandApprovalAndExecution') } },
@@ -94,17 +99,17 @@ function App() {
   return <div className="app-shell">
     <aside>
       <div className="brand"><img className="brand-icon" src={harborMark} alt="" /><img className="brand-wordmark" src={harborWordmark} alt="HostHarbor" /></div>
-      <nav aria-label={msg('main.mainNavigation')}>{sections.filter(item => item.id !== 'settings').map((item) => <button key={item.id} aria-current={active === item.id ? 'page' : undefined} onClick={() => { setActive(item.id); setMessage(null) }}>{item.id === 'connections' ? <Bot size={17} /> : item.id === 'operations' ? <Activity size={17} /> : item.id === 'servers' ? <Server size={17} /> : item.id === 'audit' ? <ScrollText size={17} /> : <KeyRound size={17} />}{item.label}{item.id === 'operations' && !!status?.pendingApprovals && <span className="approval-count" aria-label={msg('main.valuePendingApprovals', { value0: status.pendingApprovals })}>{status.pendingApprovals}</span>}</button>)}</nav>
+      <nav aria-label={msg('main.mainNavigation')}>{sections.filter(item => item.id !== 'settings').map((item) => <button key={item.id} aria-current={active === item.id ? 'page' : undefined} onClick={() => { setActive(item.id); setMessage(null) }}>{item.id === 'connections' ? <Bot size={17} /> : item.id === 'operations' ? <Activity size={17} /> : item.id === 'servers' ? <Server size={17} /> : item.id === 'inspections' ? <ClipboardCheck size={17} /> : item.id === 'audit' ? <ScrollText size={17} /> : <KeyRound size={17} />}{item.label}{item.id === 'operations' && !!status?.pendingApprovals && <span className="approval-count" aria-label={msg('main.valuePendingApprovals', { value0: status.pendingApprovals })}>{status.pendingApprovals}</span>}</button>)}</nav>
       <nav className="sidebar-footer" aria-label={msg('main.system')}><button aria-current={active === 'settings' ? 'page' : undefined} onClick={() => { setActive('settings'); setMessage(null) }}><Settings size={17} />{msg('aiSettings.settings')}</button></nav>
     </aside>
     {unlocked && reminder && (status?.pendingApprovals ?? 0) > 0 && <div className="approval-reminder" role="status"><div><strong>{msg('main.newOperationsAwaitApproval')}</strong><span>{status?.pendingApprovals} {msg('main.pending')}</span></div><button onClick={() => { setActive('operations'); setApprovalNavigation({ sequence: Date.now(), operationId: reminder.operationId }); setReminder(null) }}>{msg('main.openApprovals')}</button><button aria-label={msg('main.dismissApprovalReminder')} onClick={() => setReminder(null)}>×</button></div>}
-    <main ref={mainPane} className={`credentials-main ${active}-main${(active === 'audit' || active === 'operations') && unlocked ? ' history-main' : ''}`}>
-      {!status ? <div className="app-loading" role="status">{msg('main.loadingLocalWorkspace')}</div> : active === 'audit' ? <HistoryPage status={status} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : active === 'connections' || active === 'operations' ? <AgentWorkspace notificationTarget={approvalNavigation} onNotificationHandled={sequence => setApprovalNavigation(old => old?.sequence === sequence ? null : old)} kind={active} status={status} servers={servers} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : active === 'settings' ? <SettingsLayout active={settingsTab} onSelect={setSettingsTab}>{settingsTab === 'language' ? <LanguageSettings /> : settingsTab === 'notifications' ? <NotificationSettings /> : settingsTab === 'security' ? <SecuritySettings status={status} onRefresh={refresh} /> : settingsTab === 'ai' ? <AiSettings status={status} onRefresh={refresh} onSetup={() => setSettingsTab('security')} /> : settingsTab === 'recordings' ? <RecordingSettings status={status} onRefresh={refresh} onSetup={() => setSettingsTab('security')} /> : <ApprovalSettings status={status} servers={servers} onRefresh={refresh} onSetup={() => setSettingsTab('security')} />}</SettingsLayout> : active === 'credentials' ? <CredentialsPage status={status} credentials={credentials} servers={servers} busy={false} message={message} onDismissMessage={() => setMessage(null)} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : <ServersPage status={status} credentials={credentials} servers={servers} message={message} onDismissMessage={() => setMessage(null)} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} />}
+    <main ref={mainPane} className={`credentials-main ${active}-main${!unlocked && active !== 'settings' ? ' locked-main' : ''}${(active === 'audit' || active === 'operations') && unlocked ? ' history-main' : ''}`}>
+      {!status ? <div className="app-loading" role="status">{msg('main.loadingLocalWorkspace')}</div> : active === 'audit' ? <HistoryPage status={status} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : active === 'connections' || active === 'operations' ? <AgentWorkspace notificationTarget={approvalNavigation} onNotificationHandled={sequence => setApprovalNavigation(old => old?.sequence === sequence ? null : old)} kind={active} status={status} servers={servers} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : active === 'settings' ? <SettingsLayout active={settingsTab} onSelect={setSettingsTab}>{settingsTab === 'reportStyle' ? <ReportStyleSettings /> : settingsTab === 'language' ? <LanguageSettings /> : settingsTab === 'notifications' ? <NotificationSettings /> : settingsTab === 'security' ? <SecuritySettings status={status} onRefresh={refresh} /> : settingsTab === 'ai' ? <AiSettings status={status} onRefresh={refresh} onSetup={() => setSettingsTab('security')} /> : settingsTab === 'backup' ? <BackupSettings status={status} onRefresh={refresh} onSetup={() => setSettingsTab('security')} /> : settingsTab === 'recordings' ? <RecordingSettings status={status} onRefresh={refresh} onSetup={() => setSettingsTab('security')} /> : <ApprovalSettings status={status} servers={servers} onRefresh={refresh} onSetup={() => setSettingsTab('security')} />}</SettingsLayout> : active === 'inspections' ? <InspectionsPage key={status.lockRevision} status={status} servers={servers} onRefresh={refresh} onSetup={()=>{setSettingsTab('security');setActive('settings')}}/> : active === 'credentials' ? <CredentialsPage status={status} credentials={credentials} servers={servers} busy={false} message={message} onDismissMessage={() => setMessage(null)} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} /> : <ServersPage status={status} credentials={credentials} servers={servers} message={message} onDismissMessage={() => setMessage(null)} onRefresh={refresh} onSetup={() => { setSettingsTab('security'); setActive('settings') }} />}
 
     </main>
   </div>
 }
 
 void api.getLanguage().then(result => { if (result.ok) setLocale(result.value.locale) }).catch(() => {}).finally(() => {
-  createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+  createRoot(document.getElementById('root')!).render(<StrictMode><ToastProvider><App /></ToastProvider></StrictMode>)
 })

@@ -10,7 +10,10 @@ export async function readOutputBurst(fetchPage: (cursor: number) => Promise<Out
     if (page.nextCursor < cursor || (page.chunks.length > 0 && page.nextCursor <= cursor)) throw new Error(msg('output.cursorStalled'))
     cursor = page.nextCursor
     append(page.chunks, cursor)
-    if (page.chunks.length < 8) return { cursor, more: false, finished: finishedStates.has(page.state) }
+    if (page.outputAvailability === 'cleared') return { cursor, more: false, finished: true }
+    if (page.hasMore === false) return { cursor, more: false, finished: page.outputComplete }
+    // Compatibility with recordings served by older app versions.
+    if (page.hasMore === undefined && page.chunks.length < 8) return { cursor, more: false, finished: finishedStates.has(page.state) }
   }
   return { cursor, more: true, finished: false }
 }

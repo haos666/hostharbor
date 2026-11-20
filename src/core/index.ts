@@ -1,4 +1,7 @@
+import { ServerTagsService } from './servers/tags'
+import { InspectionService } from './inspection/service'
 import { FileService } from './files/service'
+import { BackupService } from './backup/service'
 import { DesktopSession, desktopPublicMethods } from './security/desktop-session'
 import { join } from 'node:path'
 import { ServerService } from './servers/service'
@@ -21,9 +24,11 @@ const operations = new OperationService(service, ai)
 const files = new FileService(operations)
 const investigations = new InvestigationService(operations, ai)
 const applications = new ApplicationService(operations, investigations)
+const inspections = new InspectionService(operations, applications, investigations, ai)
+const backup = new BackupService(service, operations, () => investigations.busy)
 const mcpPort = process.argv[3] === undefined ? 43821 : Number(process.argv[3])
 if (!Number.isInteger(mcpPort) || mcpPort < 0 || mcpPort > 65535) throw new AppError('INVALID_INPUT')
-const mcp = new LocalMcpServer(operations, mcpPort, applications, files)
+const mcp = new LocalMcpServer(operations, mcpPort, applications, files, inspections)
 port.on('message', (event) => {
   const message = event.data as { id?: unknown; method?: unknown; payload?: unknown }
   if (typeof message?.id !== 'number' || typeof message.method !== 'string') return
@@ -41,6 +46,21 @@ port.on('message', (event) => {
 async function dispatch(method: string, payload: unknown): Promise<unknown> {
   if (!desktopPublicMethods.has(method)) desktop.assertOpen()
   switch (method) {
+    case 'ignoreInspectionFinding': return inspections.ignore(payload)
+    case 'draftInspectionException': {const revision=desktop.revision;return inspections.draftException(payload,()=>desktop.assertRevision(revision))}
+    case 'saveInspectionException': return inspections.saveException(payload)
+    case 'queryInspectionCatalog': return inspections.catalog(payload)
+    case 'getInspectionWorkspace': return inspections.workspace(payload)
+    case 'saveInspectionPlan': return inspections.save(payload)
+    case 'draftInspectionPlan': { const revision = desktop.revision; return inspections.draft(payload, () => desktop.assertRevision(revision)) }
+    case 'listInspectionReports': return inspections.reports(payload)
+    case 'getInspectionReport': return inspections.report(payload)
+    case 'deleteInspectionReport': return inspections.removeReport(payload)
+    case 'backupSummary': return backup.summary()
+    case 'exportBackup': { const i = parse(z.object({ path: z.string().max(4096), password: z.string().max(1048576) }).strict(), payload), revision = desktop.revision; return backup.export(i.path, i.password, () => desktop.assertRevision(revision)) }
+    case 'previewBackup': { const i = parse(z.object({ path: z.string().max(4096), password: z.string().max(1048576) }).strict(), payload), revision = desktop.revision; return backup.preview(i.path, i.password, () => desktop.assertRevision(revision)) }
+    case 'commitBackup': { const revision = desktop.revision; return backup.commit(payload, () => desktop.assertRevision(revision)) }
+    case 'cancelBackup': return backup.clear()
     case 'browseFiles': { const i = parse(z.object({ profileId: idSchema, request: z.unknown() }).strict(), payload); const revision = desktop.revision; return files.browse(i.profileId, i.request, () => desktop.assertRevision(revision)) }
     case 'fileWorkspace': return files.workspace(payload)
     case 'getFileAccess': { const i = parse(z.object({ profileId: idSchema, serverId: idSchema }).strict(), payload); return files.access(i.profileId, i.serverId) }
@@ -48,7 +68,7 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
     case 'startFileTransfer': { const i = parse(z.object({ profileId: idSchema, request: z.unknown() }).strict(), payload); const revision = desktop.revision; return files.start(i.profileId, i.request, () => desktop.assertRevision(revision)) }
     case 'getMcpLockSettings': return desktop.get()
     case 'saveMcpLockSettings': return desktop.save(payload)
-    case 'lockDesktop': return desktop.lock()
+    case 'lockDesktop': backup.clear(); return desktop.lock()
     case 'listApplications': return applications.list(payload)
     case 'saveApplication': return applications.save(payload)
     case 'deleteApplication': return applications.remove(payload)
@@ -69,6 +89,8 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
     case 'clearOperationOutput': return operations.recordings.clearOutput(parse(idSchema, payload))
     case 'deleteOperation': return operations.deleteRecord(payload)
     case 'reclaimRecordingSpace': return operations.recordings.reclaim()
+    case 'getChannelApprovalPolicy': return operations.policy.channel(payload)
+    case 'saveChannelApprovalPolicy': return operations.policy.saveChannel(payload)
     case 'getApprovalPolicy': return operations.policy.get()
     case 'saveApprovalPolicy': return operations.policy.save(payload)
     case 'previewApprovalPolicy': return operations.previewPolicy(payload)
@@ -97,7 +119,12 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
       try { if (method === 'validateKey') service.validateKey(key); else { desktop.unlock(key, method === 'unlockDesktop'); try { operations.recordings.maintain() } catch (error) { desktop.lock(true); throw error } } } finally { key.fill(0); payload.fill(0) }
       return
     }
-    case 'lock': return desktop.lock(true)
+    case 'lock': backup.clear(); return desktop.lock(true)
+    case 'getServerTags': return new ServerTagsService(service).get()
+    case 'saveServerTags': return new ServerTagsService(service).save(payload)
+    case 'listProxies': return service.migrateProxies()
+    case 'saveProxy': return service.saveProxy(payload)
+    case 'deleteProxy': return service.deleteProxy(payload)
     case 'listServers': return service.listServers()
     case 'saveServer': return service.saveServer(payload)
     case 'deleteServer': return service.deleteServer(payload)
@@ -109,5 +136,5 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
     default: throw new AppError('INVALID_INPUT')
   }
 }
-process.on('exit', () => { investigations.close(); ai.close(); operations.close(); void mcp.stop(); service.close() })
+process.on('exit', () => { backup.close(); investigations.close(); ai.close(); operations.close(); void mcp.stop(); service.close() })
 port.postMessage({ type: 'core-ready', protocolVersion: 1 })

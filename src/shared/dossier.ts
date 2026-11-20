@@ -27,6 +27,7 @@ export interface InvestigationRun {
   stage: string; errorCode: string | null; operationId: string | null; evidence: InvestigationEvidence[]
 }
 export interface ServerDossier {
+  restoredAt?: number;
   manualFields?: string[];
   snapshot: string; stale?: boolean;
   runId: string; serverRevision: number; collectedAt: number; model: string

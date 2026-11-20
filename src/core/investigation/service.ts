@@ -11,6 +11,7 @@ import { instructions, tools } from './protocol'
 import { queryCommand, querySchema, type Query } from './tools'
 const terminal = new Set(['succeeded', 'failed', 'denied', 'interrupted', 'unknown', 'expired'])
 export class InvestigationService {
+  get busy(): boolean { return this.active !== null }
   private active: { serverId: string; controller: AbortController } | null = null
   private readonly invalidated = (code: ErrorCode) => this.active?.controller.abort(new AppError(code))
   private readonly aiChanged = () => this.invalidated('AI_CHANGED')

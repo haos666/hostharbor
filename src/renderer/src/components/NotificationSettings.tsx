@@ -1,3 +1,5 @@
+import { Toast } from './Toast'
+import { PageHeader } from './PageHeader'
 import { msg, errorText } from '../../../shared/i18n'
 import { useEffect, useState } from 'react'
 import type { NotificationPreferences, NotificationSettingsState, NotificationDelivery } from '../../../shared/contracts'
@@ -21,8 +23,8 @@ export function NotificationSettings() {
     finally { setBusy(false) }
   }
   const dirty = !!state && !!draft && (state.preferences.badge !== draft.badge || state.preferences.system !== draft.system || state.preferences.sound !== draft.sound)
-  return <section className="notification-settings"><header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('notificationSettings.notifications')}</h1></div></header>
-    {error && <p className="drawer-error" role="alert">{error}</p>}{message && <p className="credential-notice" role="status">{message}</p>}
+  return <section className="notification-settings"><PageHeader label={msg('aiSettings.settings')} title={msg('notificationSettings.notifications')}/>
+    {error && <Toast message={error} error onDismiss={()=>setError('')}/>}{message && <Toast message={message} onDismiss={()=>setMessage('')}/>}
     {draft && <form onSubmit={event => { event.preventDefault(); void run('save') }}><div className="security-card">
       {([{ key: 'badge', title: msg('notificationSettings.approvalBadge'), description: msg('notificationSettings.showAnAppTaskbarBadgeAndPendingCount') }, { key: 'system', title: msg('notificationSettings.systemNotifications'), description: msg('notificationSettings.combineNewApprovalRemindersWhileTheAppIs') }, { key: 'sound', title: msg('notificationSettings.notificationSound'), description: msg('notificationSettings.allowTheDefaultSystemNotificationSoundPlaybackAlso') }] as const).map(item => <label className="security-setting notification-setting" key={item.key}><div><h2>{item.title}</h2><p>{item.description}</p></div><input type="checkbox" role="switch" aria-label={item.title} checked={draft[item.key]} disabled={busy} onChange={event => setDraft({ ...draft, [item.key]: event.target.checked })} /></label>)}
     </div><div className="notification-actions"><button className="credential-primary" disabled={busy || !dirty}>{msg('notificationSettings.saveSettings')}</button><button className="credential-secondary" type="button" disabled={busy} onClick={() => void run('reload')}>{msg('aiSettings.reload')}</button></div></form>}

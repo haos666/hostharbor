@@ -1,8 +1,10 @@
+import { LockedPage } from './LockedPage'
+import { PageHeader } from './PageHeader'
 import { msg, errorText } from '../../../shared/i18n'
 import { QueryChecks } from './QueryChecks'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Plus, ShieldCheck, X } from 'lucide-react'
-import type { AccessProfile, AiSettings, AppStatus, ApprovalMode, ApprovalPolicy, ApprovalRule, PolicyDecision, ServerRecord } from '../../../shared/contracts'
+import type { AccessProfile, AiSettings, AppStatus, ApprovalMode, ApprovalPolicy, ChannelApprovalPolicy, ApprovalRule, PolicyDecision, ServerRecord } from '../../../shared/contracts'
 import { defaultRiskRules } from '../../../shared/risk-presets'
 import { riskPresets } from '../catalog'
 import type { Result } from '../../../shared/errors'
@@ -17,7 +19,8 @@ const modes: { id: ApprovalMode; name: string; detail: string }[] = [
   { id: 'paused', get name() { return msg('approvalSettings.pauseExecution') }, get detail() { return msg('approvalSettings.denyAllNewCommands') } },
 ]
 function unwrap<T>(r: Result<T>): T { if (!r.ok) throw new Error(errorText(r.error)); return r.value }
-export function ApprovalSettings({ status, servers, onRefresh, onSetup }: { status: AppStatus | null; servers: ServerRecord[]; onRefresh: () => Promise<void>; onSetup: () => void }) {
+export function ApprovalSettings({ status, servers, onRefresh, onSetup, profileId }: { profileId?:string; status: AppStatus | null; servers: ServerRecord[]; onRefresh: () => Promise<void>; onSetup: () => void }) {
+  const [channel,setChannel]=useState<ChannelApprovalPolicy|null>(null)
   const [policy, setPolicy] = useState<ApprovalPolicy | null>(null), [profiles, setProfiles] = useState<AccessProfile[]>([])
   const [editing, setEditing] = useState<ApprovalRule | null>(null), [deleting, setDeleting] = useState<ApprovalRule | null>(null)
   const [mode, setMode] = useState<ApprovalMode | null>(null), [previewing, setPreviewing] = useState(false)
@@ -28,17 +31,19 @@ export function ApprovalSettings({ status, servers, onRefresh, onSetup }: { stat
     const current = ++epoch.current
     setPolicy(null); setProfiles([]); setEditing(null); setDeleting(null); setMode(null); setPreviewing(false); setError('')
     setAi(null); setAiConfirm(false)
-    if (unlocked) void Promise.all([api.getApprovalPolicy(), api.listProfiles(), api.getAiSettings()]).then(([p, a, config]) => {
-      if (current === epoch.current) { setPolicy(unwrap(p)); setProfiles(unwrap(a)); setAi(unwrap(config)) }
+    if (unlocked) void Promise.all([profileId?api.getChannelApprovalPolicy(profileId):api.getApprovalPolicy(), api.listProfiles(), api.getAiSettings()]).then(([p, a, config]) => {
+      if (current === epoch.current) { if(profileId){const c=unwrap<ApprovalPolicy|ChannelApprovalPolicy>(p) as ChannelApprovalPolicy;setChannel(c);setPolicy({...c.policy??c.defaultPolicy,revision:c.revision})}else setPolicy(unwrap<ApprovalPolicy|ChannelApprovalPolicy>(p) as ApprovalPolicy); setProfiles(unwrap(a).filter(p=>!profileId||p.id===profileId)); setAi(unwrap(config)) }
     }).catch((e: Error) => { if (current === epoch.current) setError(e.message) })
     return () => { epoch.current++ }
-  }, [unlocked, status?.lockRevision])
+  }, [unlocked, status?.lockRevision,profileId])
   async function save(next: ApprovalPolicy, permissiveConfirmed = false) {
     if (busy) return
     const current = epoch.current
     setBusy(true); setError('')
     try {
-      const saved = unwrap(await api.saveApprovalPolicy({ ...next, permissiveConfirmed }))
+      let saved:ApprovalPolicy
+      if(profileId){const c=unwrap(await api.saveChannelApprovalPolicy({profileId,revision:channel!.revision,policy:{...next,rules:next.rules.filter(r=>!r.profileIds.length||r.profileIds.includes(profileId)).map(r=>({...r,profileIds:[]}))},permissiveConfirmed}));setChannel(c);saved={...c.policy??c.defaultPolicy,revision:c.revision}}
+      else saved=unwrap(await api.saveApprovalPolicy({ ...next, permissiveConfirmed }))
       if (current !== epoch.current) return
       setPolicy(saved); setEditing(null); setDeleting(null); setMode(null); setAiConfirm(false); await onRefresh()
     } catch (e) { if (current === epoch.current) setError(e instanceof Error ? e.message : msg('approvalSettings.saveFailed')) }
@@ -46,16 +51,21 @@ export function ApprovalSettings({ status, servers, onRefresh, onSetup }: { stat
   }
   async function reload() {
     const current = epoch.current
-    try { const next = unwrap(await api.getApprovalPolicy()); if (current === epoch.current) { setPolicy(next); setError('') } }
+    try { const next = profileId?await (async()=>{const c=unwrap(await api.getChannelApprovalPolicy(profileId));setChannel(c);return {...c.policy??c.defaultPolicy,revision:c.revision}})():unwrap(await api.getApprovalPolicy()); if (current === epoch.current) { setPolicy(next); setError('') } }
     catch (e) { if (current === epoch.current) setError(e instanceof Error ? e.message : msg('aiSettings.loadFailed')) }
   }
   const open = (job: () => void) => { setError(''); job() }
   const errorView = error && <p className="drawer-error" role="alert">{error}</p>
   const aiProvider = ai?.activeProvider, aiEntry = aiProvider ? ai?.providers[aiProvider] : null
+  if (!unlocked) return <LockedPage label={profileId?profiles[0]?.name:msg('aiSettings.settings')} title={msg(profileId?'channel.policy':'globalApproval.title')} status={status} onRefresh={onRefresh} onSetup={onSetup}/>
   return <section className="approval-settings">
-    <header className="credentials-header"><div className="credentials-title"><span className="page-label">{msg('aiSettings.settings')}</span><h1>{msg('approvalSettings.approvalPolicy')}</h1></div></header>
+    <PageHeader label={profileId?profiles[0]?.name:msg('aiSettings.settings')} title={msg(profileId?'channel.policy':'globalApproval.title')}/>
     {!unlocked ? <UnlockGate status={status} onRefresh={onRefresh} onSetup={onSetup} /> : !policy ? <>{errorView}<button className="credential-secondary" onClick={() => void reload()}>{msg('aiSettings.reload')}</button></> : <>
       {!editing && !deleting && !mode && !aiConfirm && error && <>{errorView}<button className="credential-secondary" disabled={busy} onClick={() => void reload()}>{msg('approvalSettings.reloadPolicy')}</button></>}
+      {!profileId&&<section className="global-approval-controls"><label><div><strong>{msg('globalApproval.force')}</strong><p>{msg('globalApproval.forceHelp')}</p></div><input type="checkbox" role="switch" checked={!!policy.forceApproval} disabled={busy} onChange={e=>void save({...policy,forceApproval:e.target.checked})}/></label><label><div><strong>{msg('globalApproval.deny')}</strong><p>{msg('globalApproval.denyHelp')}</p></div><input type="checkbox" role="switch" checked={policy.denyExecution??policy.mode==='paused'} disabled={busy} onChange={e=>void save({...policy,mode:policy.mode==='paused'?'all-approval':policy.mode,denyExecution:e.target.checked})}/></label></section>}
+      {profileId&&channel?.globalPaused&&<p className="operation-warning">{msg('channel.globallyPaused')}</p>}
+      {profileId&&channel?.globalApprovalRequired&&!channel.globalPaused&&<p className="operation-warning">{msg('globalApproval.active')}</p>}
+      {profileId&&<>
       <div className="policy-modes" role="group" aria-label={msg('approvalSettings.approvalMode')}>{modes.map((item) => <div key={item.id} className={`policy-mode-card${policy.mode === item.id ? ' selected' : ''}`}><button aria-pressed={policy.mode === item.id} disabled={busy} onClick={() => { if (item.id !== policy.mode) open(() => setMode(item.id)) }}><ShieldCheck size={19} /><strong>{item.name}</strong><span>{item.detail}</span></button></div>)}</div>
       <section className="policy-file-approvals" aria-labelledby="file-approvals-title"><header><h2 id="file-approvals-title">{msg('approvalSettings.fileApprovals')}</h2><span>{msg('approvalSettings.currentFileMode', {mode: modes.find(item => item.id === policy.mode)?.name ?? msg('approvalSettings.legacyRuleMode')})}</span></header>
         <div className="policy-file-options"><label><input type="checkbox" checked={policy.uploadApprovalRequired?.[policy.mode] ?? true} disabled={busy} onChange={e => void save({ ...policy, uploadApprovalRequired: { ...policy.uploadApprovalRequired, [policy.mode]: e.target.checked } })} /><span>{msg('approvalSettings.uploadsRequireApproval')}</span></label><label><input type="checkbox" checked={policy.downloadApprovalRequired?.[policy.mode] ?? true} disabled={busy} onChange={e => void save({ ...policy, downloadApprovalRequired: { ...policy.downloadApprovalRequired, [policy.mode]: e.target.checked } })} /><span>{msg('approvalSettings.downloadsRequireApproval')}</span></label></div>
@@ -63,7 +73,7 @@ export function ApprovalSettings({ status, servers, onRefresh, onSetup }: { stat
       </section>
       {policy.mode === 'rules' && <div className="operation-warning" role="status">{msg('approvalSettings.legacyRulesAreRetainedUnmatchedCommandsStillNeed')}</div>}
       {policy.mode === 'permissive' && <section className="assisted-policy"><h2>{msg('approvalSettings.permissiveExecutionScope')}</h2><p>{msg('approvalSettings.dailyOperationsRunAutomaticallyIncludingConfigurationEditsInstalls')}</p><p>{msg('approvalSettings.originalCommandsExecuteAndMayReadSensitiveFiles')}</p><details><summary>{msg('approvalSettings.actionsRequiringConfirmation')}</summary><p>{msg('approvalSettings.deletingOrTruncatingFilesDeletingContainersImagesOr')}</p><p>{msg('approvalSettings.writesRedirectionVariablesLoopsBackgroundJobsAndScripts')}</p><p>{msg('approvalSettings.baselineRiskDetectionAlwaysAppliesLegacyDisabledHints')}</p></details></section>}
-      <p className="agent-hint">{msg('approvalSettings.thePolicyAppliesToEveryAccessProfileIncluding')}</p>
+      {!profileId&&<p className="agent-hint">{msg('approvalSettings.thePolicyAppliesToEveryAccessProfileIncluding')}</p>}
       {policy.mode === 'assisted' && <section className="assisted-policy">
         <h2>{msg('approvalSettings.commonDiagnosticQueries')}</h2><p>{msg('approvalSettings.systemStateVersionsFileMetadataLogsAndBounded')}</p>
         <details><summary>{msg('approvalSettings.viewSupportedScope')}</summary><p>{msg('approvalSettings.supportsSemicolonsNewlinesPipesAndLiteralEchoPrintf')}</p><p>{msg('approvalSettings.coversResourcesPortsProcessesDisksNetworkMetadataRegistered')}</p><p>{msg('approvalSettings.curlIsRestrictedToHeadAndFixedHealth')}</p><p>{msg('approvalSettings.writesStartStopActionsDynamicExpansionGeneralScripts')}</p></details>
@@ -85,6 +95,7 @@ export function ApprovalSettings({ status, servers, onRefresh, onSetup }: { stat
       {!policy.rules.length ? <div className="agent-empty"><ShieldCheck size={28} /><h2>{msg('approvalSettings.noCustomRulesYet')}</h2><p>{msg('approvalSettings.forExampleAllowAnExactCommandForA')}</p></div> : <div className="agent-list">{policy.rules.map((r) => <article className="agent-row policy-rule" key={r.id}><div><strong>{r.name}</strong><span className={`policy-action action-${r.action}`}>{actions[r.action]}</span><p>{r.enabled ? r.expiresAt !== null && r.expiresAt <= Date.now() ? msg('approvalSettings.expired') : msg('approvalSettings.enabled') : msg('approvalSettings.disabled')} · {r.profileIds.length ? msg('approvalSettings.valueAccessProfiles', { value0: r.profileIds.length }) : msg('approvalSettings.allAccessProfiles')} · {r.serverIds.length ? msg('approvalSettings.valueServers', { value0: r.serverIds.length }) : msg('approvalSettings.allServers')}</p><code>{r.command === null ? msg('approvalSettings.allCommands') : r.command}</code>{r.cwd && <small>{msg('approvalSettings.requestedDirectory')}{r.cwd}</small>}</div><div className="policy-row-actions"><button className="credential-secondary" disabled={busy} onClick={() => open(() => setEditing(r))}>{msg('approvalSettings.edit')}</button><button className="text-button" disabled={busy} onClick={() => open(() => setDeleting(r))}>{msg('agentWorkspace.delete')}</button></div></article>)}</div>}
       <p className="security-footnote">{msg('approvalSettings.policyChangesInvalidatePendingAndUndispatchedRequestsDispatched')}</p>
       </details>
+      </>}
       </>}
       {mode && <Dialog className="agent-dialog" labelledBy="policy-mode-title" onDismiss={() => { if (!busy) setMode(null) }}><h2 id="policy-mode-title">{msg('common.switchMode', { mode: modes.find((m) => m.id === mode)?.name })}</h2><p>{mode === 'assisted' ? msg('approvalSettings.builtInSystemQueriesAndBoundedQueriesUsing') : mode === 'permissive' ? msg('approvalSettings.onlyRecognizedDestructiveActionsRequireConfirmationRoutineEdits') : mode === 'paused' ? msg('approvalSettings.denyNewCommandsDispatchedCommandsContinue') : msg('approvalSettings.everyNewCommandNeedsManualConfirmationAllowRules')}</p><p>{msg('approvalSettings.pendingAndUndispatchedRequestsBecomeInvalid')}</p>{errorView}<div className="agent-dialog-actions"><button className="credential-secondary" disabled={busy} onClick={() => setMode(null)}>{msg('agentWorkspace.cancel')}</button><button className="credential-primary" disabled={busy} onClick={() => void save({ ...policy, mode }, mode === 'permissive')}>{busy ? msg('agentWorkspace.saving') : msg('approvalSettings.confirmSwitch')}</button></div></Dialog>}
       {aiConfirm && <Dialog className="agent-dialog" labelledBy="ai-approval-confirm" onDismiss={() => { if (!busy) setAiConfirm(false) }}><h2 id="ai-approval-confirm">{msg('approvalSettings.enableAiRiskAdvice2')}</h2><p>{msg('approvalSettings.unmatchedCommandsAndRequestedDirectoriesAreSentTo')}</p><p>{aiProvider} · {aiEntry?.model}</p><code>{aiEntry?.baseUrl}</code><p>{msg('approvalSettings.suspectedSensitiveCommandsAreSkippedButFilteringCannot')}</p>{errorView}<div className="agent-dialog-actions"><button className="credential-secondary" disabled={busy} onClick={() => setAiConfirm(false)}>{msg('agentWorkspace.cancel')}</button><button className="credential-primary" disabled={busy || !aiEntry} onClick={() => void save({ ...policy, aiAssist: true })}>{msg('approvalSettings.enable')}</button></div></Dialog>}

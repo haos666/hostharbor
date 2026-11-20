@@ -26,7 +26,7 @@ export function operationGuidance(operation: Pick<Operation, 'id' | 'state' | 'c
   if (operation.transfer && (operation.state === 'succeeded' || operation.state === 'failed')) return { ...base, message: '文件任务已结束，读取当前fileResult中的目录条目、进度、校验和发布状态；不需要read_output，不自动重新传输。' }
   if (operation.transfer && (operation.state === 'unknown' || operation.intentAt !== null)) return { ...base, nextAction: 'inspect', message: '文件操作最终结果未确认。核对fileResult和临时文件线索，先检查目标文件，禁止自动重传或覆盖。' }
   if (operation.state === 'succeeded' || operation.state === 'failed') return {
-    ...base, nextAction: 'read_output', message: '操作已结束，请读取原操作输出并结合退出结果分析；不要自动重新执行。',
+    ...base, nextAction: 'read_output', resume: { tool: 'read_output', arguments: { id: operation.id, cursor: 0 } }, message: '操作已结束，请读取原操作输出并结合退出结果分析；命令结束不代表输出已读完。按每页 hasMore 和 nextCursor 续读同一操作，不要自动重新执行。',
   }
   if (operation.state === 'unknown' || operation.intentAt !== null) return {
     ...base, nextAction: 'inspect', message: '执行结果或远端进程状态未确认。查看原操作记录并告知用户，不能根据断开连接推断远端已停止，禁止自动重试。',
